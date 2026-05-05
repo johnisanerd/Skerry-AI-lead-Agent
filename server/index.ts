@@ -1,0 +1,2699 @@
+/**
+ * Skerry — server-side proxy for sensitive API calls.
+ *
+ * Why: VITE_* env vars end up in the client bundle. For real production we
+ * want OpenAI / Resend / NeverBounce keys server-only. The client calls
+ * scoped endpoints here; this process holds the secrets.
+ *
+ * In dev, Vite handles the SPA on port 3000. This server runs alongside on
+ * port 3001 and exposes JSON endpoints under /api/*. The client calls
+ * `${import.meta.env.VITE_API_BASE ?? ""}/api/...`, defaulting to same-origin
+ * (works in production), or `http://localhost:3001` in dev when set.
+ *
+ * Env vars (no VITE_ prefix — server-only):
+ *   OPENAI_API_KEY
+ *   RESEND_API_KEY
+ *   NEVERBOUNCE_API_KEY
+ *   APIFY_API_KEY
+ *   SKERRY_FROM_EMAIL              e.g. "Skerry <hello@your-domain.com>"
+ *   SKERRY_ALLOWED_ORIGINS         optional comma-separated list, e.g.
+ *                                  "https://app.example.com,http://localhost:3000"
+ *                                  When set, browser requests with Origin not in the
+ *                                  list get 403 on /api/* (CSRF cookies + credentialed API).
+ *   DATABASE_URL                   Postgres for entitlement usage (optional in dev).
+ *   DATABASE_SSL_REJECT_UNAUTHORIZED  production default true; set "false" only if your
+ *                                  provider uses a non-public CA (not recommended).
+ */
+
+import "dotenv/config";
+
+import express from "express";
+import { createServer } from "http";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import { z } from "zod";
+import { EntitlementDb } from "./db";
+import { assertEnterpriseProductionConfig } from "./productionConfig";
+import { admin } from "./supabaseAdmin";
+import { discoverLeads } from "./pipeline/discoveryRouter";
+import { startSequenceRunner } from "./jobs/sequenceRunner";
+import { handleResendWebhook, validateResendWebhook } from "./routes/webhooks/resendWebhook.js";
+import { createABTest, calculateABTestPerformance, promoteWinner } from "./pipeline/abSelector.js";
+import { generateCSVExport, generateHubSpotExport, generateSalesforceExport } from "./pipeline/exportService.js";
+import { logAudit, getAuditLogs } from "./lib/auditLogger.js";
+import { createDeletionRequest, exportWorkspaceData, deleteWorkspace, hasDeletionRequest } from "./pipeline/gdprService.js";
+import { startGdprProcessor } from "./jobs/gdprProcessor.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+interface SendEmailBody {
+  to: string;
+  subject?: string;
+  bodyMarkdown: string;
+}
+
+interface VerifyEmailBody {
+  email: string;
+}
+
+interface LoginBody {
+  email: string;
+  password: string;
+}
+
+interface EntitlementStartBody {
+  requestedLeads?: number;
+}
+
+interface GenerateLeadsBody {
+  businessDescription?: string;
+  targetAudience?: string;
+  requestedLeads?: number;
+}
+
+interface GenerateEmailBody {
+  lead?: {
+    firstName?: string;
+    lastName?: string;
+    title?: string;
+    organization?: { name?: string };
+    websiteContext?: string;
+    personContext?: string;
+    uniqueAngles?: string[];
+  };
+  businessDescription?: string;
+  senderName?: string;
+  angle?: string;
+}
+
+type AccountTier = "solo" | "team" | "agency";
+type UserRole = "user" | "developer";
+
+interface AuthSessionUser {
+  name: string;
+  email: string;
+  role: UserRole;
+  tier: AccountTier;
+}
+
+interface SessionPayload {
+  user: AuthSessionUser;
+  exp: number;
+}
+
+interface RequestContext {
+  requestId: string;
+}
+
+interface RequestWithContext extends express.Request {
+  ctx?: RequestContext;
+}
+
+interface GeneratedLead {
+  firstName: string;
+  lastName: string;
+  title: string;
+  email: string;
+  linkedin: string;
+  organization: { name: string; website: string };
+  websiteContext: string;
+  personContext: string;
+  uniqueAngles: string[];
+}
+
+const AUTH_COOKIE_NAME = "skerry_session";
+const CSRF_COOKIE_NAME = "skerry_csrf";
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+const SESSION_SECRET = process.env.SESSION_SECRET;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 8;
+const ALLOW_DEMO_AUTH = process.env.ALLOW_DEMO_AUTH === "true";
+
+function parseAllowedOrigins(): string[] {
+  return (process.env.SKERRY_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function isOriginAllowed(
+  origin: string | undefined,
+  allowed: string[]
+): boolean {
+  if (!origin) return true;
+  if (allowed.length === 0) return true;
+  return allowed.includes(origin);
+}
+
+const DEMO_USERS: Record<string, { password: string; user: AuthSessionUser }> =
+  {
+    "solo@skerry.io": {
+      password: "solo123",
+      user: {
+        name: "Solo User",
+        email: "solo@skerry.io",
+        role: "user",
+        tier: "solo",
+      },
+    },
+    "team@skerry.io": {
+      password: "team123",
+      user: {
+        name: "Team User",
+        email: "team@skerry.io",
+        role: "user",
+        tier: "team",
+      },
+    },
+    "agency@skerry.io": {
+      password: "agency123",
+      user: {
+        name: "Agency User",
+        email: "agency@skerry.io",
+        role: "user",
+        tier: "agency",
+      },
+    },
+    "dev@skerry.io": {
+      password: "skerry-dev-2024",
+      user: {
+        name: "Developer",
+        email: "dev@skerry.io",
+        role: "developer",
+        tier: "agency",
+      },
+    },
+  };
+
+const loginAttempts = new Map<string, { count: number; firstAt: number }>();
+const TIER_LIMITS: Record<
+  AccountTier,
+  { monthlyRuns: number; maxLeadsPerRun: number }
+> = {
+  solo: { monthlyRuns: 50, maxLeadsPerRun: 5 },
+  team: { monthlyRuns: 250, maxLeadsPerRun: 20 },
+  agency: { monthlyRuns: 1000, maxLeadsPerRun: 50 },
+};
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
+const PROVIDER_TIMEOUT_MS = Number(process.env.PROVIDER_TIMEOUT_MS ?? 12000);
+const PROVIDER_RETRIES = Number(process.env.PROVIDER_RETRIES ?? 2);
+
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function makeRequestId(): string {
+  return crypto.randomBytes(8).toString("hex");
+}
+
+function logEvent(
+  level: "info" | "warn" | "error",
+  event: string,
+  payload: Record<string, unknown>
+): void {
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    event,
+    ...payload,
+  };
+  const line = JSON.stringify(entry);
+  if (level === "error") {
+    console.error(line);
+  } else if (level === "warn") {
+    console.warn(line);
+  } else {
+    console.log(line);
+  }
+}
+
+function asyncHandler(
+  fn: (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction
+  ) => Promise<unknown>
+): express.RequestHandler {
+  return (req, res, next) => {
+    void fn(req, res, next).catch(next);
+  };
+}
+
+/** JSON error bodies: hide internals outside production. */
+function clientSafeError(err: unknown): string {
+  if (process.env.NODE_ENV === "production") {
+    return "Service temporarily unavailable.";
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+function clientSafeWarning(_err: unknown): string {
+  return process.env.NODE_ENV === "production"
+    ? "Upstream check unavailable."
+    : String(_err);
+}
+
+async function fetchWithTimeoutRetry(
+  url: string,
+  init: RequestInit,
+  options: {
+    timeoutMs: number;
+    retries: number;
+    requestId: string;
+    provider: string;
+  }
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= options.retries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+    try {
+      const resp = await fetch(url, { ...init, signal: controller.signal });
+      clearTimeout(timeout);
+      if (resp.ok) return resp;
+      if (resp.status >= 500 && attempt < options.retries) {
+        continue;
+      }
+      return resp;
+    } catch (err) {
+      clearTimeout(timeout);
+      lastErr = err;
+      if (attempt >= options.retries) break;
+      logEvent("warn", "provider_retry", {
+        requestId: options.requestId,
+        provider: options.provider,
+        attempt: attempt + 1,
+        error: String(err),
+      });
+    }
+  }
+  throw new Error(
+    `Provider request failed (${options.provider}): ${String(lastErr)}`
+  );
+}
+
+function signSession(payload: SessionPayload): string {
+  if (!SESSION_SECRET) {
+    throw new Error("SESSION_SECRET is required.");
+  }
+  const body = Buffer.from(JSON.stringify(payload), "utf8").toString(
+    "base64url"
+  );
+  const sig = crypto
+    .createHmac("sha256", SESSION_SECRET)
+    .update(body)
+    .digest("base64url");
+  return `${body}.${sig}`;
+}
+
+function verifySession(token: string): SessionPayload | null {
+  if (!SESSION_SECRET) return null;
+  const [body, sig] = token.split(".");
+  if (!body || !sig) return null;
+  const expected = crypto
+    .createHmac("sha256", SESSION_SECRET)
+    .update(body)
+    .digest("base64url");
+  if (sig !== expected) return null;
+  try {
+    const payload = JSON.parse(
+      Buffer.from(body, "base64url").toString("utf8")
+    ) as SessionPayload;
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function parseCookie(req: express.Request, name: string): string | null {
+  const cookie = req.headers.cookie;
+  if (!cookie) return null;
+  const chunk = cookie
+    .split(";")
+    .map(c => c.trim())
+    .find(c => c.startsWith(`${name}=`));
+  if (!chunk) return null;
+  return decodeURIComponent(chunk.slice(name.length + 1));
+}
+
+function isSecureRequest(req: express.Request): boolean {
+  return req.protocol === "https" || req.get("x-forwarded-proto") === "https";
+}
+
+function getSessionUser(req: express.Request): AuthSessionUser | null {
+  const token = parseCookie(req, AUTH_COOKIE_NAME);
+  if (!token) return null;
+  const payload = verifySession(token);
+  return payload?.user ?? null;
+}
+
+function getCurrentMonthKey(): string {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function createCsrfToken(): string {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function setCsrfCookie(
+  req: express.Request,
+  res: express.Response,
+  token: string
+): void {
+  const cookie = [
+    `${CSRF_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    "Path=/",
+    "SameSite=Lax",
+    isSecureRequest(req) ? "Secure" : "",
+    `Max-Age=${SESSION_TTL_SECONDS}`,
+  ]
+    .filter(Boolean)
+    .join("; ");
+  res.append("Set-Cookie", cookie);
+}
+
+function clearAuthCookies(req: express.Request, res: express.Response): void {
+  const secure = isSecureRequest(req) ? "Secure" : "";
+  const authCookie = [
+    `${AUTH_COOKIE_NAME}=`,
+    "HttpOnly",
+    "Path=/",
+    "SameSite=Lax",
+    secure,
+    "Max-Age=0",
+  ]
+    .filter(Boolean)
+    .join("; ");
+  const csrfCookie = [
+    `${CSRF_COOKIE_NAME}=`,
+    "Path=/",
+    "SameSite=Lax",
+    secure,
+    "Max-Age=0",
+  ]
+    .filter(Boolean)
+    .join("; ");
+  res.append("Set-Cookie", authCookie);
+  res.append("Set-Cookie", csrfCookie);
+}
+
+function synthesizeServerLeads(params: {
+  count: number;
+  tier: AccountTier;
+  businessDescription?: string;
+  targetAudience?: string;
+}): GeneratedLead[] {
+  const firstNames = [
+    "Aria",
+    "Marcus",
+    "Priya",
+    "Devon",
+    "Sana",
+    "Jules",
+    "Kai",
+    "Mira",
+  ];
+  const lastNames = [
+    "Voss",
+    "Tan",
+    "Raman",
+    "Reyes",
+    "Okafor",
+    "Nilsson",
+    "Grant",
+    "Kim",
+  ];
+  const titlesByTier: Record<AccountTier, string[]> = {
+    solo: ["Founder", "Co-Founder", "Marketing Lead"],
+    team: ["VP of Growth", "Head of Marketing", "Director of Demand Gen"],
+    agency: ["Chief Revenue Officer", "Head of GTM", "VP of Strategy"],
+  };
+  const orgs = [
+    {
+      name: "Helios Labs",
+      website: "helioslabs.io",
+      domain: "renewable analytics",
+    },
+    {
+      name: "Lattice Health",
+      website: "latticehealth.co",
+      domain: "health data infra",
+    },
+    {
+      name: "Polaris Data",
+      website: "polarisdata.ai",
+      domain: "ML observability",
+    },
+    {
+      name: "Aether Logistics",
+      website: "aetherlogistics.io",
+      domain: "AI freight matching",
+    },
+  ];
+
+  const leads: GeneratedLead[] = [];
+  for (let i = 0; i < params.count; i++) {
+    const firstName = firstNames[i % firstNames.length];
+    const lastName = lastNames[(i * 3) % lastNames.length];
+    const title =
+      titlesByTier[params.tier][i % titlesByTier[params.tier].length];
+    const org = orgs[i % orgs.length];
+    leads.push({
+      firstName,
+      lastName,
+      title,
+      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${org.website}`,
+      linkedin: `https://linkedin.com/in/${firstName.toLowerCase()}${lastName.toLowerCase()}`,
+      organization: { name: org.name, website: org.website },
+      websiteContext: `${org.name} is active in ${org.domain} and signals enterprise GTM maturity.`,
+      personContext: `${firstName} appears relevant for ${
+        params.businessDescription?.slice(0, 50) ?? "your outreach"
+      }. ${params.targetAudience ? `Target fit: ${params.targetAudience}.` : ""}`,
+      uniqueAngles: [
+        "Category shift",
+        "Pipeline efficiency",
+        "Strategic positioning",
+      ],
+    });
+  }
+  return leads;
+}
+
+async function generateLeadsWithOpenAI(params: {
+  apiKey: string;
+  count: number;
+  tier: AccountTier;
+  businessDescription: string;
+  targetAudience: string;
+  requestId: string;
+}): Promise<GeneratedLead[]> {
+  const depthInstruction =
+    params.tier === "solo"
+      ? "Generate basic lead profiles with minimal context."
+      : params.tier === "team"
+        ? "Generate detailed lead profiles with website context and LinkedIn enrichment."
+        : "Generate highly detailed lead profiles with strategic and intent-oriented angles.";
+
+  const prompt = `You are a B2B lead generation AI. Generate ${params.count} realistic lead profiles.
+Business Description: ${params.businessDescription}
+Target Audience: ${params.targetAudience}
+Research Depth: ${depthInstruction}
+
+Return a JSON array of leads. Each lead must have:
+- firstName, lastName
+- title
+- email
+- linkedin
+- organization: { name, website }
+- websiteContext
+- personContext
+- uniqueAngles (array of 3 short strings)
+
+Return ONLY valid JSON array.`;
+
+  const resp = await fetchWithTimeoutRetry(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: 2500,
+      }),
+    },
+    {
+      timeoutMs: PROVIDER_TIMEOUT_MS,
+      retries: PROVIDER_RETRIES,
+      requestId: params.requestId,
+      provider: "openai",
+    }
+  );
+  if (!resp.ok) {
+    throw new Error(`OpenAI request failed (${resp.status})`);
+  }
+  const json = (await resp.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = json.choices?.[0]?.message?.content ?? "[]";
+  const cleaned = content
+    .replace(/```json\n?/g, "")
+    .replace(/```\n?/g, "")
+    .trim();
+  const parsed = JSON.parse(cleaned) as GeneratedLead[];
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function synthesizeServerEmail(params: {
+  firstName: string;
+  organizationName: string;
+  angle: string;
+  senderName: string;
+}): string {
+  return `**Subject:** Quick idea for ${params.organizationName}
+
+Hi ${params.firstName},
+
+Noticed your team is leaning into ${params.angle.toLowerCase()}. We put together a short teardown on how similar teams are turning that into qualified pipeline without adding process overhead.
+
+If useful, I can send it over.
+
+Best,
+${params.senderName}`;
+}
+
+async function generateEmailWithOpenAI(params: {
+  apiKey: string;
+  lead: {
+    firstName: string;
+    lastName: string;
+    title: string;
+    organizationName: string;
+    websiteContext: string;
+    personContext: string;
+    uniqueAngles: string[];
+  };
+  businessDescription: string;
+  senderName: string;
+  angle?: string;
+  requestId: string;
+}): Promise<string> {
+  const angle =
+    params.angle ?? params.lead.uniqueAngles[0] ?? "value proposition";
+  const prompt = `You are an expert cold email copywriter specializing in asset-based outreach.
+
+Write a highly personalized cold email for the following lead:
+- Name: ${params.lead.firstName} ${params.lead.lastName}
+- Title: ${params.lead.title} at ${params.lead.organizationName}
+- Company Context: ${params.lead.websiteContext}
+- Person Context: ${params.lead.personContext}
+- Strategic Angle: ${angle}
+
+Sender's Business: ${params.businessDescription}
+Sender Name: ${params.senderName}
+
+Requirements:
+- Subject line that references something specific about their company
+- Opening that shows genuine research
+- 2-3 short sentences connecting their situation to sender value
+- Soft CTA
+- Total length: 80-120 words
+- Tone: professional but conversational, not salesy
+
+Format as Markdown with **Subject:** on the first line, then the email body.`;
+
+  const resp = await fetchWithTimeoutRetry(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: 600,
+      }),
+    },
+    {
+      timeoutMs: PROVIDER_TIMEOUT_MS,
+      retries: PROVIDER_RETRIES,
+      requestId: params.requestId,
+      provider: "openai",
+    }
+  );
+  if (!resp.ok) throw new Error(`OpenAI request failed (${resp.status})`);
+  const json = (await resp.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  return json.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
+/** Lightweight markdown → HTML for transactional email. */
+function mdToHtml(md: string): string {
+  let html = md
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(
+      /^# (.+)$/gm,
+      '<h1 style="font-size:24px;margin:0 0 16px;color:#0a1628;">$1</h1>'
+    )
+    .replace(
+      /^## (.+)$/gm,
+      '<h2 style="font-size:14px;text-transform:uppercase;letter-spacing:.18em;margin:24px 0 8px;color:#0891b2;">$1</h2>'
+    )
+    .replace(
+      /^&gt; (.+)$/gm,
+      '<blockquote style="border-left:3px solid #06b6d4;padding-left:12px;color:#475569;margin:16px 0;">$1</blockquote>'
+    )
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(
+      /^---$/gm,
+      '<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;" />'
+    );
+  html = html
+    .split(/\n{2,}/)
+    .map(para =>
+      /^\s*<(h1|h2|blockquote|hr)/.test(para)
+        ? para
+        : `<p style="margin:0 0 12px;line-height:1.5;color:#1e293b;">${para.replace(/\n/g, "<br/>")}</p>`
+    )
+    .join("\n");
+  return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;">${html}</div>`;
+}
+
+function mdToText(md: string): string {
+  return md
+    .replace(/^#+\s+/gm, "")
+    .replace(/^>\s*/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/^---$/gm, "");
+}
+
+function extractSubjectAndBody(md: string): { subject: string; body: string } {
+  const m = md.match(/^\s*\*\*Subject:\*\*\s*(.+?)\n([\s\S]*)$/);
+  if (m) return { subject: m[1].trim(), body: m[2].trim() };
+  const firstH1 = md.match(/^#\s+(.+)$/m);
+  return { subject: firstH1 ? firstH1[1].trim() : "Quick note", body: md };
+}
+
+export async function buildApp(): Promise<express.Express> {
+  if (!SESSION_SECRET || SESSION_SECRET.length < 32) {
+    throw new Error(
+      "SESSION_SECRET must be set and at least 32 characters long."
+    );
+  }
+  assertEnterpriseProductionConfig();
+
+  const app = express();
+  app.disable("x-powered-by");
+  const entitlementDb = new EntitlementDb({
+    databaseUrl: process.env.DATABASE_URL,
+  });
+  await entitlementDb.init();
+
+  app.set("trust proxy", 1);
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: false,
+      hsts:
+        process.env.NODE_ENV === "production"
+          ? { maxAge: 31536000, includeSubDomains: true, preload: false }
+          : false,
+    })
+  );
+  app.use(express.json({ limit: "1mb" }));
+  app.use(
+    rateLimit({
+      windowMs: 60 * 1000,
+      max: 180,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { ok: false, error: "Too many requests. Please retry shortly." },
+    })
+  );
+  const authLimiter = rateLimit({
+    windowMs: LOGIN_WINDOW_MS,
+    max: LOGIN_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      ok: false,
+      error: "Too many login attempts. Try again in a few minutes.",
+    },
+  });
+  const llmLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 24,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      ok: false,
+      error: "Too many AI requests. Please wait a moment.",
+    },
+  });
+
+  // Default: reflect any Origin (dev). Set SKERRY_ALLOWED_ORIGINS to restrict credentialed API.
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    const allowedOrigins = parseAllowedOrigins();
+    if (origin && !isOriginAllowed(origin, allowedOrigins)) {
+      if (req.method === "OPTIONS") return res.sendStatus(403);
+      if (req.path.startsWith("/api/")) {
+        return res
+          .status(403)
+          .json({ ok: false, error: "Origin not allowed." });
+      }
+    }
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    } else {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-CSRF-Token");
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    next();
+  });
+
+  app.use((req, res, next) => {
+    const requestId = req.get("x-request-id") || makeRequestId();
+    (req as RequestWithContext).ctx = { requestId };
+    res.setHeader("x-request-id", requestId);
+    const startedAt = Date.now();
+    res.on("finish", () => {
+      logEvent("info", "http_request", {
+        requestId,
+        method: req.method,
+        path: req.path,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - startedAt,
+      });
+    });
+    if (!req.path.startsWith("/api/")) return next();
+    if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
+    if (req.path === "/api/auth/login" || req.path === "/api/auth/csrf")
+      return next();
+    const csrfCookie = parseCookie(req, CSRF_COOKIE_NAME);
+    const csrfHeader = req.get("x-csrf-token");
+    if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
+      return res
+        .status(403)
+        .json({ ok: false, error: "CSRF token invalid or missing." });
+    }
+    return next();
+  });
+
+  // ──────────── /api/auth/login
+  const loginSchema = z.object({
+    email: z.string().email().max(320),
+    password: z.string().min(1).max(512),
+  });
+  const entitlementStartSchema = z.object({
+    requestedLeads: z.coerce.number().int().positive().optional(),
+  });
+  const generateLeadsSchema = z.object({
+    businessDescription: z.string().max(5000).optional(),
+    targetAudience: z.string().max(2000).optional(),
+    requestedLeads: z.coerce.number().int().positive().optional(),
+  });
+  const generateEmailSchema = z.object({
+    lead: z
+      .object({
+        firstName: z.string().max(200).optional(),
+        lastName: z.string().max(200).optional(),
+        title: z.string().max(200).optional(),
+        organization: z
+          .object({ name: z.string().max(300).optional() })
+          .optional(),
+        websiteContext: z.string().max(5000).optional(),
+        personContext: z.string().max(5000).optional(),
+        uniqueAngles: z.array(z.string().max(200)).max(10).optional(),
+      })
+      .optional(),
+    businessDescription: z.string().max(5000).optional(),
+    senderName: z.string().max(200).optional(),
+    angle: z.string().max(300).optional(),
+  });
+  const verifyEmailSchema = z.object({
+    email: z.string().email().max(320),
+  });
+  const sendEmailSchema = z.object({
+    to: z.string().email().max(320),
+    subject: z.string().max(300).optional(),
+    bodyMarkdown: z.string().min(1).max(50000),
+  });
+
+  app.post("/api/auth/login", authLimiter, (req, res) => {
+    const parsed = loginSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "email + password required" });
+    }
+    const { email, password } = parsed.data as LoginBody;
+    if (!ALLOW_DEMO_AUTH) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Auth provider not configured. Set ALLOW_DEMO_AUTH=true only for controlled dev.",
+      });
+    }
+    const normalizedEmail = email.trim().toLowerCase();
+    const ip = req.ip ?? "unknown_ip";
+    const attemptKey = `${ip}:${normalizedEmail}`;
+    const now = Date.now();
+    const attempt = loginAttempts.get(attemptKey);
+    if (attempt) {
+      const elapsed = now - attempt.firstAt;
+      if (elapsed > LOGIN_WINDOW_MS) {
+        loginAttempts.delete(attemptKey);
+      } else if (attempt.count >= LOGIN_MAX_ATTEMPTS) {
+        return res.status(429).json({
+          ok: false,
+          error: "Too many login attempts. Try again in a few minutes.",
+        });
+      }
+    }
+
+    const match = DEMO_USERS[normalizedEmail];
+    if (!match || match.password !== password) {
+      const prev = loginAttempts.get(attemptKey);
+      if (!prev) {
+        loginAttempts.set(attemptKey, { count: 1, firstAt: now });
+      } else {
+        loginAttempts.set(attemptKey, {
+          count: prev.count + 1,
+          firstAt: prev.firstAt,
+        });
+      }
+      return res
+        .status(401)
+        .json({ ok: false, error: "Invalid email or password." });
+    }
+
+    loginAttempts.delete(attemptKey);
+
+    const payload: SessionPayload = {
+      user: match.user,
+      exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
+    };
+    const token = signSession(payload);
+    const csrfToken = createCsrfToken();
+    const cookie = [
+      `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}`,
+      "HttpOnly",
+      "Path=/",
+      "SameSite=Lax",
+      isSecureRequest(req) ? "Secure" : "",
+      `Max-Age=${SESSION_TTL_SECONDS}`,
+    ]
+      .filter(Boolean)
+      .join("; ");
+    res.append("Set-Cookie", cookie);
+    setCsrfCookie(req, res, csrfToken);
+    return res.json({ ok: true, user: match.user, csrfToken });
+  });
+
+  app.get("/api/auth/csrf", (req, res) => {
+    const token = parseCookie(req, AUTH_COOKIE_NAME);
+    if (!token || !verifySession(token)) {
+      return res.status(401).json({ ok: false, error: "No active session" });
+    }
+    const csrfToken = createCsrfToken();
+    setCsrfCookie(req, res, csrfToken);
+    return res.json({ ok: true, csrfToken });
+  });
+
+  // ──────────── /api/auth/session
+  app.get("/api/auth/session", (req, res) => {
+    const token = parseCookie(req, AUTH_COOKIE_NAME);
+    if (!token)
+      return res.status(401).json({ ok: false, error: "No active session" });
+    const payload = verifySession(token);
+    if (!payload)
+      return res.status(401).json({ ok: false, error: "Session expired" });
+    const csrfToken = createCsrfToken();
+    setCsrfCookie(req, res, csrfToken);
+    return res.json({ ok: true, user: payload.user, csrfToken });
+  });
+
+  // ──────────── /api/auth/logout
+  app.post("/api/auth/logout", (req, res) => {
+    clearAuthCookies(req, res);
+    return res.json({ ok: true });
+  });
+
+  const requireAuth: express.RequestHandler = (req, res, next) => {
+    const user = getSessionUser(req);
+    if (!user) {
+      return res
+        .status(401)
+        .json({ ok: false, error: "Authentication required" });
+    }
+    return next();
+  };
+
+  // ──────────── /api/workspaces
+  app.get(
+    "/api/workspaces",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      // If Supabase is configured, fetch real workspaces
+      if (admin) {
+        try {
+          // Query workspace_members for the current user
+          const { data: memberships, error: memberError } = await admin
+            .from('workspace_members')
+            .select(`
+              workspace_id,
+              role,
+              workspaces (
+                id,
+                name,
+                plan_tier,
+                slug
+              )
+            `)
+            .eq('user_email', user.email);
+          
+          if (memberError) throw memberError;
+          
+          // Extract workspace data from memberships
+          const workspaces = memberships?.map(m => m.workspaces).filter(Boolean) || [];
+          return res.json({ ok: true, workspaces });
+        } catch (err) {
+          logEvent("error", "workspaces_fetch_failed", {
+            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+            error: String(err),
+          });
+        }
+      }
+
+      // Fallback: return demo workspace
+      return res.json({
+        ok: true,
+        workspaces: [{
+          id: "demo-workspace",
+          name: "Demo Workspace",
+          plan_tier: user.tier,
+          slug: "demo",
+        }]
+      });
+    })
+  );
+
+  // ──────────── /api/workspaces/:id/icp
+  app.get(
+    "/api/workspaces/:id/icp",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      const { id } = req.params as { id: string };
+      const targetWorkspaceId = id || "demo-workspace";
+
+      // If Supabase is configured, fetch real ICP profile
+      if (admin) {
+        try {
+          const { data, error } = await admin
+            .from('icp_profiles')
+            .select('business_description, ideal_customer, problem_solved')
+            .eq('workspace_id', targetWorkspaceId)
+            .single();
+          
+          if (data && !error) {
+            return res.json({ ok: true, icp: data });
+          }
+        } catch (err) {
+          logEvent("error", "icp_fetch_failed", {
+            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+            error: String(err),
+          });
+        }
+      }
+
+      // Fallback: return null (client will use localStorage)
+      return res.json({ ok: true, icp: null });
+    })
+  );
+
+  app.post(
+    "/api/workspaces/:id/icp",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      const { id } = req.params as { id: string };
+      const { business_description, ideal_customer, problem_solved } = req.body as {
+        business_description?: string;
+        ideal_customer?: string;
+        problem_solved?: string;
+      };
+
+      const targetWorkspaceId = id || "demo-workspace";
+
+      // If Supabase is configured, save ICP profile
+      if (admin) {
+        try {
+          const { error } = await admin
+            .from('icp_profiles')
+            .upsert({
+              workspace_id: targetWorkspaceId,
+              business_description,
+              ideal_customer,
+              problem_solved,
+              updated_at: new Date().toISOString(),
+            }, {
+              onConflict: 'workspace_id'
+            });
+
+          if (error) throw error;
+          
+          return res.json({ ok: true });
+        } catch (err) {
+          logEvent("error", "icp_save_failed", {
+            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+            error: String(err),
+          });
+          return res.status(502).json({ 
+            ok: false, 
+            error: "Failed to save ICP profile" 
+          });
+        }
+      }
+
+      // Fallback: success (client will keep using localStorage)
+      return res.json({ ok: true, fallback: 'localStorage' });
+    })
+  );
+
+  // ──────────── /api/entitlements/usage
+  app.get(
+    "/api/entitlements/usage",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+      if (!entitlementDb.isConfigured) {
+        return res.status(503).json({
+          ok: false,
+          error: "DATABASE_URL is required for entitlements.",
+        });
+      }
+      try {
+        const limits = TIER_LIMITS[user.tier];
+        const usageMonth = getCurrentMonthKey();
+        const usage = await entitlementDb.getUsage(user.email, usageMonth);
+        return res.json({
+          ok: true,
+          tier: user.tier,
+          usageMonth,
+          runsUsed: usage.runsUsed,
+          monthlyRuns: limits.monthlyRuns,
+          runsRemaining: Math.max(limits.monthlyRuns - usage.runsUsed, 0),
+          maxLeadsPerRun: limits.maxLeadsPerRun,
+        });
+      } catch (err) {
+        logEvent("error", "entitlements_usage_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(502).json({ ok: false, error: clientSafeError(err) });
+      }
+    })
+  );
+
+  // ──────────── /api/entitlements/research/start
+  app.post(
+    "/api/entitlements/research/start",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+      const parsed = entitlementStartSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "Invalid entitlement payload." });
+      }
+      const limits = TIER_LIMITS[user.tier];
+      const { requestedLeads } = parsed.data as EntitlementStartBody;
+      const requested = Math.max(
+        1,
+        Number(requestedLeads ?? limits.maxLeadsPerRun)
+      );
+      if (requested > limits.maxLeadsPerRun) {
+        return res.status(400).json({
+          ok: false,
+          error: `Plan allows max ${limits.maxLeadsPerRun} leads per run.`,
+        });
+      }
+
+      if (!entitlementDb.isConfigured) {
+        return res.status(503).json({
+          ok: false,
+          error: "DATABASE_URL is required for entitlements.",
+        });
+      }
+      try {
+        const usageMonth = getCurrentMonthKey();
+        const usage = await entitlementDb.getUsage(user.email, usageMonth);
+        if (usage.runsUsed >= limits.monthlyRuns) {
+          return res.status(403).json({
+            ok: false,
+            error:
+              "Monthly run limit reached. Upgrade plan or wait for next month.",
+            tier: user.tier,
+            runsUsed: usage.runsUsed,
+            monthlyRuns: limits.monthlyRuns,
+          });
+        }
+        return res.json({
+          ok: true,
+          tier: user.tier,
+          usageMonth,
+          runsUsed: usage.runsUsed,
+          monthlyRuns: limits.monthlyRuns,
+          runsRemaining: Math.max(limits.monthlyRuns - usage.runsUsed, 0),
+          maxLeadsPerRun: limits.maxLeadsPerRun,
+          requestedLeads: requested,
+        });
+      } catch (err) {
+        logEvent("error", "entitlements_research_start_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(502).json({ ok: false, error: clientSafeError(err) });
+      }
+    })
+  );
+
+  // ──────────── /api/leads/generate
+  app.post(
+    "/api/leads/generate",
+    requireAuth,
+    llmLimiter,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+      if (!entitlementDb.isConfigured) {
+        return res.status(503).json({
+          ok: false,
+          error: "DATABASE_URL is required for entitlements.",
+        });
+      }
+      const limits = TIER_LIMITS[user.tier];
+      const usageMonth = getCurrentMonthKey();
+      const consumed = await entitlementDb.consumeRun({
+        email: user.email,
+        tier: user.tier,
+        usageMonth,
+        monthlyRunsLimit: limits.monthlyRuns,
+      });
+      if (!consumed.allowed) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "Monthly run limit reached. Upgrade plan or wait for next month.",
+          tier: user.tier,
+          runsUsed: consumed.runsUsed,
+          monthlyRuns: limits.monthlyRuns,
+        });
+      }
+
+      const parsed = generateLeadsSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "Invalid lead generation payload." });
+      }
+      const body = parsed.data as GenerateLeadsBody;
+      const requested = Math.max(
+        1,
+        Number(body.requestedLeads ?? limits.maxLeadsPerRun)
+      );
+      const count = Math.min(requested, limits.maxLeadsPerRun);
+      const businessDescription = (
+        body.businessDescription ?? "B2B SaaS"
+      ).trim();
+      const targetAudience = (
+        body.targetAudience ?? "Growth-stage startups"
+      ).trim();
+
+      let leads: GeneratedLead[] = [];
+      let source: "apollo" | "openai" | "none" = "none";
+      
+      // Parse ICP from request (for now, use businessDescription and targetAudience)
+      const parsedICP = {
+        roles: [targetAudience], // Simple parsing - will be enhanced in Phase 3
+        locations: undefined,
+        companySizeRange: undefined,
+      };
+      
+      // Priority 1: Apollo Discovery (legal, kostenlos, DSGVO-konform)
+      if (process.env.APOLLO_API_KEY) {
+        try {
+          const result = await discoverLeads({ 
+            icp: parsedICP, 
+            limit: count, 
+            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown" 
+          });
+          
+          // Map Apollo leads to existing GeneratedLead format
+          leads = result.leads.map(lead => ({
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            title: lead.title,
+            email: lead.email || `${lead.firstName.toLowerCase()}.${lead.lastName.toLowerCase()}@${lead.organization.website ? new URL(lead.organization.website).hostname : 'example.com'}`,
+            linkedin: lead.linkedin || '',
+            organization: { 
+              name: lead.organization.name, 
+              website: lead.organization.website || '' 
+            },
+            websiteContext: `${lead.organization.name} is active in ${targetAudience}. Professional profile from Apollo.io.`,
+            personContext: `${lead.firstName} is a ${lead.title} at ${lead.organization.name}. Relevant for ${businessDescription}.`,
+            uniqueAngles: [
+              "Strategic Partnership",
+              "Technology Integration", 
+              "Market Expansion"
+            ],
+          }));
+          source = "apollo";
+        } catch (err) {
+          if (err instanceof Error && err.message === 'OPENAI_FALLBACK') {
+            // Continue to OpenAI fallback below
+            leads = [];
+          } else {
+            logEvent("warn", "apollo_discovery_failed", {
+              requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+              error: String(err),
+            });
+          }
+        }
+      }
+      
+      // Priority 2: OpenAI Lead Generation (Fallback wenn kein Apollo oder Apollo fehlgeschlagen)
+      if (leads.length === 0 && process.env.OPENAI_API_KEY) {
+        try {
+          leads = await generateLeadsWithOpenAI({
+            apiKey: process.env.OPENAI_API_KEY,
+            count,
+            tier: user.tier,
+            businessDescription,
+            targetAudience,
+            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          });
+          source = "openai";
+        } catch (err) {
+          logEvent("warn", "openai_leads_failed", {
+            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+            error: String(err),
+          });
+        }
+      }
+      
+      // No provider available
+      if (leads.length === 0) {
+        return res.status(503).json({
+          ok: false,
+          code: 'NO_DISCOVERY_PROVIDER',
+          message: 'Kein Discovery-Provider konfiguriert.',
+          setup: {
+            apollo: 'APOLLO_API_KEY in .env setzen — kostenlos auf apollo.io',
+            openai: 'OPENAI_API_KEY in .env setzen — Fallback-Option',
+          }
+        });
+      }
+
+      return res.json({
+        ok: true,
+        source,
+        leads,
+        tier: user.tier,
+        usageMonth,
+        runsUsed: consumed.runsUsed,
+        monthlyRuns: limits.monthlyRuns,
+        runsRemaining: Math.max(limits.monthlyRuns - consumed.runsUsed, 0),
+        maxLeadsPerRun: limits.maxLeadsPerRun,
+      });
+    })
+  );
+
+  // ──────────── /api/leads/persist
+  app.post(
+    "/api/leads/persist",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      const { leads, workspaceId } = req.body as { 
+        leads: any[], 
+        workspaceId?: string 
+      };
+
+      if (!admin) {
+        return res.json({ 
+          ok: true, 
+          persisted: false, 
+          reason: 'no_db' 
+        });
+      }
+
+      try {
+        const targetWorkspaceId = workspaceId || "demo-workspace";
+        const leadsToInsert = leads.map(lead => ({
+          workspace_id: targetWorkspaceId,
+          first_name: lead.firstName || lead.personal?.firstName,
+          last_name: lead.lastName || lead.personal?.lastName,
+          email: lead.email || lead.personal?.email,
+          title: lead.title || lead.personal?.title,
+          linkedin_url: lead.linkedin || lead.personal?.linkedin,
+          company_name: lead.organization?.name || lead.organization?.name,
+          company_website: lead.organization?.website || lead.organization?.website,
+          website_context: lead.websiteContext || lead.extraction?.websiteContext,
+          person_context: lead.personContext || lead.extraction?.personContext,
+          unique_angles: lead.uniqueAngles || lead.extraction?.uniqueAngles,
+          newsletter_body: lead.newsletter?.body,
+          stage: lead.stage || 'source',
+          created_at: new Date().toISOString(),
+        }));
+
+        const { error } = await admin
+          .from('leads')
+          .insert(leadsToInsert);
+
+        if (error) throw error;
+        
+        return res.json({ 
+          ok: true, 
+          persisted: true, 
+          count: leadsToInsert.length 
+        });
+      } catch (err) {
+        logEvent("error", "leads_persist_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(502).json({ 
+          ok: false, 
+          error: "Failed to persist leads" 
+        });
+      }
+    })
+  );
+
+  // ──────────── /api/dev/seed-leads (development only)
+  if (process.env.NODE_ENV === "development") {
+    app.post(
+      "/api/dev/seed-leads",
+      requireAuth,
+      asyncHandler(async (req, res) => {
+        const user = getSessionUser(req);
+        if (!user) {
+          return res
+            .status(401)
+            .json({ ok: false, error: "Authentication required" });
+        }
+
+        const { count = 5, businessDescription = "B2B SaaS", targetAudience = "Growth-stage startups" } = req.body as {
+          count?: number;
+          businessDescription?: string;
+          targetAudience?: string;
+        };
+
+        const leads = synthesizeServerLeads({
+          count: Math.min(count, 20),
+          tier: user.tier,
+          businessDescription,
+          targetAudience,
+        });
+
+        return res.json({
+          ok: true,
+          source: "synthesizer",
+          leads,
+          development: true,
+        });
+      })
+    );
+  }
+
+  // ──────────── /api/email/generate
+  app.post(
+    "/api/email/generate",
+    requireAuth,
+    llmLimiter,
+    asyncHandler(async (req, res) => {
+      const parsed = generateEmailSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "Invalid email generation payload." });
+      }
+      const body = parsed.data as GenerateEmailBody;
+      const lead = body.lead ?? {};
+      const firstName = (lead.firstName ?? "").trim();
+      const lastName = (lead.lastName ?? "").trim();
+      const title = (lead.title ?? "Executive").trim();
+      const organizationName = (
+        lead.organization?.name ?? "your company"
+      ).trim();
+      const websiteContext = (lead.websiteContext ?? "").trim();
+      const personContext = (lead.personContext ?? "").trim();
+      const uniqueAngles = Array.isArray(lead.uniqueAngles)
+        ? lead.uniqueAngles.filter((a): a is string => typeof a === "string")
+        : [];
+      if (!firstName) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "lead.firstName required" });
+      }
+
+      const businessDescription = (
+        body.businessDescription ?? "B2B SaaS company"
+      ).trim();
+      const senderName = (body.senderName ?? "Skerry").trim();
+      const angle = (
+        body.angle ??
+        uniqueAngles[0] ??
+        "value proposition"
+      ).trim();
+      const apiKey = process.env.OPENAI_API_KEY;
+
+      if (!apiKey) {
+        return res.json({
+          ok: true,
+          source: "synthesizer",
+          markdown: synthesizeServerEmail({
+            firstName,
+            organizationName,
+            angle,
+            senderName,
+          }),
+        });
+      }
+
+      try {
+        const markdown = await generateEmailWithOpenAI({
+          apiKey,
+          lead: {
+            firstName,
+            lastName,
+            title,
+            organizationName,
+            websiteContext,
+            personContext,
+            uniqueAngles,
+          },
+          businessDescription,
+          senderName,
+          angle,
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+        });
+        if (!markdown) {
+          throw new Error("Empty model response");
+        }
+        return res.json({ ok: true, source: "openai", markdown });
+      } catch (err) {
+        logEvent("warn", "openai_email_fallback", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.json({
+          ok: true,
+          source: "synthesizer",
+          markdown: synthesizeServerEmail({
+            firstName,
+            organizationName,
+            angle,
+            senderName,
+          }),
+        });
+      }
+    })
+  );
+
+  // ──────────── /api/ready (DB ping when DATABASE_URL is set; for orchestrator readiness probes)
+  app.get(
+    "/api/ready",
+    asyncHandler(async (_req, res) => {
+      if (!entitlementDb.isConfigured) {
+        return res.status(200).json({ ok: true, database: "not_configured" });
+      }
+      try {
+        await entitlementDb.ping();
+        return res.status(200).json({ ok: true, database: "ok" });
+      } catch (err) {
+        logEvent("error", "readiness_db_ping_failed", { error: String(err) });
+        return res.status(503).json({ ok: false, database: "unavailable" });
+      }
+    })
+  );
+
+  // ──────────── /api/health
+  app.get("/api/health", (_req, res) => {
+    const hasApollo = Boolean(process.env.APOLLO_API_KEY);
+    const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
+    res.json({
+      ok: true,
+      version: '1.0.0',
+      services: {
+        apollo: hasApollo,
+        openai: hasOpenAI,
+        resend: Boolean(process.env.RESEND_API_KEY),
+        neverbounce: Boolean(process.env.NEVERBOUNCE_API_KEY),
+        supabase: Boolean(process.env.SUPABASE_URL),
+        stripe: Boolean(process.env.STRIPE_SECRET_KEY),
+      },
+      discovery_provider: hasApollo ? 'apollo' : hasOpenAI ? 'openai' : 'none',
+      demo_mode: process.env.ALLOW_DEMO_AUTH === 'true',
+      ready_for_production: hasApollo && Boolean(process.env.SUPABASE_URL),
+    });
+  });
+
+  // ──────────── /api/billing/checkout
+  app.post('/api/billing/checkout', requireAuth, asyncHandler(async (req, res) => {
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeKey) {
+      return res.status(503).json({
+        ok: false,
+        code: 'STRIPE_NOT_CONFIGURED',
+        message: 'Stripe ist noch nicht konfiguriert. Kommt bald.',
+      });
+    }
+    const { priceId } = req.body as { priceId: string };
+    const { default: Stripe } = await import('stripe');
+    const stripe = new Stripe(stripeKey);
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${process.env.PUBLIC_APP_URL ?? 'http://localhost:3000'}/billing?success=1`,
+      cancel_url: `${process.env.PUBLIC_APP_URL ?? 'http://localhost:3000'}/billing`,
+    });
+    return res.json({ ok: true, url: session.url });
+  }));
+
+  // ──────────── /api/billing/webhook
+  app.post('/api/billing/webhook', asyncHandler(async (req, res) => {
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    
+    if (!stripeKey || !webhookSecret) {
+      return res.status(503).json({ ok: false, error: 'Stripe not configured' });
+    }
+
+    const sig = req.headers['stripe-signature'] as string;
+    if (!sig) {
+      return res.status(400).json({ ok: false, error: 'Missing signature' });
+    }
+
+    const { default: Stripe } = await import('stripe');
+    const stripe = new Stripe(stripeKey);
+    
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err) {
+      return res.status(400).json({ ok: false, error: 'Invalid signature' });
+    }
+
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as any;
+        const workspaceId = session.metadata?.workspace_id;
+        const customerId = session.customer;
+        const subscriptionId = session.subscription;
+        
+        if (admin && workspaceId && customerId && subscriptionId) {
+          // Update workspace with subscription info
+          await admin
+            .from('workspaces')
+            .update({
+              stripe_customer_id: customerId,
+              stripe_subscription_id: subscriptionId,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', workspaceId);
+            
+          // Determine plan tier from price ID
+          const priceId = session.display_items?.[0]?.price?.id;
+          let planTier = 'solo';
+          if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = 'team';
+          if (priceId === process.env.STRIPE_PRICE_AGENCY) planTier = 'agency';
+          
+          await admin
+            .from('workspaces')
+            .update({ plan_tier: planTier })
+            .eq('id', workspaceId);
+        }
+        break;
+      }
+      
+      case 'customer.subscription.updated': {
+        const subscription = event.data.object as any;
+        const workspaceId = subscription.metadata?.workspace_id;
+        
+        if (admin && workspaceId) {
+          let planTier = 'solo';
+          const priceId = subscription.items.data[0]?.price?.id;
+          if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = 'team';
+          if (priceId === process.env.STRIPE_PRICE_AGENCY) planTier = 'agency';
+          
+          await admin
+            .from('workspaces')
+            .update({ plan_tier: planTier })
+            .eq('id', workspaceId);
+        }
+        break;
+      }
+      
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as any;
+        const workspaceId = subscription.metadata?.workspace_id;
+        
+        if (admin && workspaceId) {
+          await admin
+            .from('workspaces')
+            .update({ 
+              plan_tier: 'solo',
+              stripe_subscription_id: null,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', workspaceId);
+        }
+        break;
+      }
+    }
+
+    res.json({ ok: true });
+  }));
+
+  // ──────────── /api/sequences
+  app.post(
+    "/api/sequences",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res.status(401).json({ ok: false, error: "Authentication required" });
+      }
+
+      const { name, steps } = req.body as {
+        name: string;
+        steps: any[];
+      };
+
+      const workspaceId = "demo-workspace"; // TODO: Get from auth context
+
+      if (!admin) {
+        return res.json({ ok: true, fallback: 'no_db', sequence: null });
+      }
+
+      try {
+        const { data, error } = await admin
+          .from('sequences')
+          .insert({
+            workspace_id: workspaceId,
+            name,
+            steps,
+            is_active: true
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        
+        return res.json({ ok: true, sequence: data });
+      } catch (err) {
+        logEvent("error", "sequence_create_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(502).json({ 
+          ok: false, 
+          error: "Failed to create sequence" 
+        });
+      }
+    })
+  );
+
+  app.get(
+    "/api/sequences",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res.status(401).json({ ok: false, error: "Authentication required" });
+      }
+
+      const workspaceId = "demo-workspace"; // TODO: Get from auth context
+
+      if (!admin) {
+        return res.json({ ok: true, sequences: [] });
+      }
+
+      try {
+        const { data, error } = await admin
+          .from('sequences')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .eq('is_active', true)
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        
+        return res.json({ ok: true, sequences: data || [] });
+      } catch (err) {
+        logEvent("error", "sequences_fetch_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(502).json({ 
+          ok: false, 
+          error: "Failed to fetch sequences" 
+        });
+      }
+    })
+  );
+
+  app.post(
+    "/api/sequences/:id/enroll",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res.status(401).json({ ok: false, error: "Authentication required" });
+      }
+
+      const { id } = req.params as { id: string };
+      const { leadId } = req.body as { leadId: string };
+
+      if (!admin) {
+        return res.json({ ok: true, fallback: 'no_db' });
+      }
+
+      try {
+        // Get sequence details
+        const { data: sequence, error: sequenceError } = await admin
+          .from('sequences')
+          .select('steps, workspace_id')
+          .eq('id', id)
+          .single();
+
+        if (sequenceError || !sequence) {
+          return res.status(404).json({ ok: false, error: "Sequence not found" });
+        }
+
+        // Calculate first step send time
+        const firstStep = sequence.steps[0];
+        const nextSendAt = new Date();
+        nextSendAt.setDate(nextSendAt.getDate() + (firstStep?.delayDays || 0));
+
+        // Create enrollment
+        const { data: enrollment, error: enrollmentError } = await admin
+          .from('sequence_enrollments')
+          .insert({
+            lead_id: leadId,
+            sequence_id: id,
+            workspace_id: sequence.workspace_id,
+            current_step: 1,
+            status: 'active',
+            next_send_at: nextSendAt.toISOString()
+          })
+          .select()
+          .single();
+
+        if (enrollmentError) throw enrollmentError;
+        
+        return res.json({ ok: true, enrollment });
+      } catch (err) {
+        logEvent("error", "sequence_enroll_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(502).json({ 
+          ok: false, 
+          error: "Failed to enroll lead in sequence" 
+        });
+      }
+    })
+  );
+
+  app.delete(
+    "/api/sequences/:id/enrollments/:leadId",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res.status(401).json({ ok: false, error: "Authentication required" });
+      }
+
+      const { id, leadId } = req.params as { id: string; leadId: string };
+
+      if (!admin) {
+        return res.json({ ok: true, fallback: 'no_db' });
+      }
+
+      try {
+        const { error } = await admin
+          .from('sequence_enrollments')
+          .delete()
+          .eq('sequence_id', id)
+          .eq('lead_id', leadId);
+
+        if (error) throw error;
+        
+        return res.json({ ok: true });
+      } catch (err) {
+        logEvent("error", "sequence_unenroll_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(502).json({ 
+          ok: false, 
+          error: "Failed to remove lead from sequence" 
+        });
+      }
+    })
+  );
+
+  // ──────────── /api/ab-tests
+  app.post(
+    "/api/ab-tests",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res.status(401).json({ ok: false, error: "Authentication required" });
+      }
+
+      const { sequenceId, stepNumber, variants } = req.body as {
+        sequenceId: string;
+        stepNumber: number;
+        variants: any[];
+      };
+
+      const workspaceId = "demo-workspace"; // TODO: Get from auth context
+
+      if (!admin) {
+        return res.json({ ok: true, fallback: 'no_db', abTestId: null });
+      }
+
+      try {
+        const abTestId = await createABTest(workspaceId, sequenceId, stepNumber, variants);
+        
+        if (abTestId) {
+          return res.json({ ok: true, abTestId });
+        } else {
+          return res.status(500).json({ ok: false, error: "Failed to create A/B test" });
+        }
+      } catch (err) {
+        logEvent("error", "ab_test_create_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(500).json({ 
+          ok: false, 
+          error: "Failed to create A/B test" 
+        });
+      }
+    })
+  );
+
+  app.get(
+    "/api/ab-tests/:id/results",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res.status(401).json({ ok: false, error: "Authentication required" });
+      }
+
+      const { id } = req.params as { id: string };
+
+      if (!admin) {
+        return res.json({ ok: true, results: [], hasEnoughData: false });
+      }
+
+      try {
+        const results = await calculateABTestPerformance(id);
+        
+        // Check if we have enough data (min 50 sends total)
+        const totalSends = results.reduce((sum, r) => sum + r.sends, 0);
+        const hasEnoughData = totalSends >= 50;
+
+        // Determine winner
+        let winnerVariantId = null;
+        if (hasEnoughData && results.length > 0) {
+          const maxScore = Math.max(...results.map(r => r.intentScore));
+          const secondBest = results
+            .filter(r => r.intentScore < maxScore)
+            .sort((a, b) => b.intentScore - a.intentScore)[0];
+          
+          const winner = results.find(r => r.intentScore === maxScore);
+          if (winner && (!secondBest || (maxScore - secondBest.intentScore) >= 5)) {
+            winnerVariantId = winner.variantId;
+          }
+        }
+
+        return res.json({ 
+          ok: true, 
+          results, 
+          hasEnoughData, 
+          winnerVariantId 
+        });
+      } catch (err) {
+        logEvent("error", "ab_test_results_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(500).json({ 
+          ok: false, 
+          error: "Failed to get A/B test results" 
+        });
+      }
+    })
+  );
+
+  app.post(
+    "/api/ab-tests/:id/promote",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res.status(401).json({ ok: false, error: "Authentication required" });
+      }
+
+      const { id } = req.params as { id: string };
+      const { winnerVariantId } = req.body as { winnerVariantId: string };
+
+      if (!admin) {
+        return res.json({ ok: true, fallback: 'no_db' });
+      }
+
+      try {
+        await promoteWinner(id, winnerVariantId);
+        
+        return res.json({ ok: true });
+      } catch (err) {
+        logEvent("error", "ab_test_promote_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(500).json({ 
+          ok: false, 
+          error: "Failed to promote winner" 
+        });
+      }
+    })
+  );
+
+  // ──────────── /api/leads/export
+  app.get('/api/leads/export', requireAuth, asyncHandler(async (req, res) => {
+    const user = getSessionUser(req);
+    if (!user) {
+      return res.status(401).json({ ok: false, error: "Authentication required" });
+    }
+
+    const { format = 'csv', workspaceId, leadIds } = req.query as {
+      format?: string;
+      workspaceId?: string;
+      leadIds?: string;
+    };
+
+    const targetWorkspaceId = workspaceId || "demo-workspace"; // TODO: Get from auth context
+
+    if (!admin) {
+      return res.status(503).json({ ok: false, error: "Export not available without database" });
+    }
+
+    try {
+      let content: string;
+      let filename: string;
+      let mimeType: string;
+
+      switch (format) {
+        case 'csv':
+          content = await generateCSVExport(targetWorkspaceId);
+          filename = `skerry-leads-csv-${new Date().toISOString().split('T')[0]}.csv`;
+          mimeType = 'text/csv';
+          break;
+
+        case 'hubspot':
+          const hubspotData = await generateHubSpotExport(targetWorkspaceId);
+          content = JSON.stringify(hubspotData, null, 2);
+          filename = `skerry-leads-hubspot-${new Date().toISOString().split('T')[0]}.json`;
+          mimeType = 'application/json';
+          break;
+
+        case 'salesforce':
+          content = await generateSalesforceExport(targetWorkspaceId);
+          filename = `skerry-leads-salesforce-${new Date().toISOString().split('T')[0]}.csv`;
+          mimeType = 'text/csv';
+          break;
+
+        default:
+          return res.status(400).json({ ok: false, error: "Invalid format. Use: csv, hubspot, or salesforce" });
+      }
+
+      // Set headers for file download
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(content);
+
+    } catch (err) {
+      logEvent("error", "leads_export_failed", {
+        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+        format,
+        workspaceId: targetWorkspaceId,
+        error: String(err),
+      });
+      
+      const errorMessage = err instanceof Error ? err.message : 'Export failed';
+      return res.status(500).json({ ok: false, error: errorMessage });
+    }
+  }));
+
+  // ──────────── /api/audit/logs
+  app.get('/api/audit/logs', requireAuth, asyncHandler(async (req, res) => {
+    const user = getSessionUser(req);
+    if (!user) {
+      return res.status(401).json({ ok: false, error: "Authentication required" });
+    }
+
+    const { limit = 50, action } = req.query as {
+      limit?: string;
+      action?: string;
+    };
+
+    const workspaceId = "demo-workspace"; // TODO: Get from auth context
+
+    if (!admin) {
+      return res.json({ ok: true, logs: [] });
+    }
+
+    try {
+      const logs = await getAuditLogs(
+        workspaceId, 
+        parseInt(limit || '50') || 50,
+        action
+      );
+
+      return res.json({ ok: true, logs });
+    } catch (err) {
+      logEvent("error", "audit_logs_fetch_failed", {
+        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+        workspaceId,
+        error: String(err),
+      });
+      return res.status(500).json({ 
+        ok: false, 
+        error: "Failed to fetch audit logs" 
+      });
+    }
+  }));
+
+  app.get('/api/audit/logs/export', requireAuth, asyncHandler(async (req, res) => {
+    const user = getSessionUser(req);
+    if (!user) {
+      return res.status(401).json({ ok: false, error: "Authentication required" });
+    }
+
+    const { format = 'csv', action } = req.query as {
+      format?: string;
+      action?: string;
+    };
+
+    const workspaceId = "demo-workspace"; // TODO: Get from auth context
+
+    if (!admin) {
+      return res.status(503).json({ ok: false, error: "Export not available without database" });
+    }
+
+    try {
+      const logs = await getAuditLogs(workspaceId, 1000, action);
+
+      if (format === 'csv') {
+        // Generate CSV
+        const headers = ['ID', 'User ID', 'Action', 'Resource Type', 'Resource ID', 'Metadata', 'Created At'];
+        const csvRows = logs.map(log => [
+          log.id,
+          log.user_id || '',
+          log.action,
+          log.resource_type || '',
+          log.resource_id || '',
+          JSON.stringify(log.metadata),
+          log.created_at
+        ]);
+
+        const csvContent = [
+          headers.join(','),
+          ...csvRows.map(row => row.map(cell => `"${cell}"`).join(','))
+        ].join('\n');
+
+        const filename = `skerry-audit-logs-${new Date().toISOString().split('T')[0]}.csv`;
+        
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send(csvContent);
+      } else {
+        // JSON format
+        const filename = `skerry-audit-logs-${new Date().toISOString().split('T')[0]}.json`;
+        
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.json({ logs, exportedAt: new Date().toISOString() });
+      }
+
+    } catch (err) {
+      logEvent("error", "audit_logs_export_failed", {
+        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+        workspaceId,
+        format,
+        error: String(err),
+      });
+      return res.status(500).json({ 
+        ok: false, 
+        error: "Failed to export audit logs" 
+      });
+    }
+  }));
+
+  // ──────────── /api/leads/:id/delete-request
+  app.post('/api/leads/:id/delete-request', requireAuth, asyncHandler(async (req, res) => {
+    const user = getSessionUser(req);
+    if (!user) {
+      return res.status(401).json({ ok: false, error: "Authentication required" });
+    }
+
+    const { id } = req.params as { id: string };
+    const workspaceId = "demo-workspace"; // TODO: Get from auth context
+
+    if (!admin) {
+      return res.status(503).json({ ok: false, error: "GDPR features not available without database" });
+    }
+
+    try {
+      // Hole Lead-Email für Löschantrag
+      const { data: lead, error: leadError } = await admin
+        .from('leads')
+        .select('personal(email)')
+        .eq('id', id)
+        .single();
+
+      if (leadError || !lead) {
+        return res.status(404).json({ ok: false, error: "Lead not found" });
+      }
+
+      const userEmail = lead.personal?.email;
+      if (!userEmail) {
+        return res.status(400).json({ ok: false, error: "Lead has no email address" });
+      }
+
+      // Prüfe ob bereits Löschantrag existiert
+      const hasExisting = await hasDeletionRequest(userEmail);
+      if (hasExisting) {
+        return res.json({ 
+          ok: true, 
+          message: "Deletion request already exists",
+          status: "pending"
+        });
+      }
+
+      // Erstelle Löschantrag
+      const requestId = await createDeletionRequest({
+        workspaceId,
+        leadId: id,
+        userEmail,
+        requestSource: 'user_request'
+      });
+
+      if (requestId) {
+        // Audit Log
+        await logAudit({
+          workspaceId,
+          userId: user.id,
+          action: 'lead.deletion_requested',
+          resourceType: 'lead',
+          resourceId: id,
+          metadata: {
+            userEmail,
+            requestId,
+            deletionDeadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+          }
+        });
+
+        return res.json({ 
+          ok: true, 
+          message: "Deletion request created. Data will be deleted within 30 days.",
+          requestId,
+          deletionDeadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        });
+      } else {
+        return res.status(500).json({ ok: false, error: "Failed to create deletion request" });
+      }
+
+    } catch (err) {
+      logEvent("error", "deletion_request_failed", {
+        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+        leadId: id,
+        error: String(err),
+      });
+      return res.status(500).json({ 
+        ok: false, 
+        error: "Failed to create deletion request" 
+      });
+    }
+  }));
+
+  // ──────────── /api/workspaces/:id/data-export
+  app.get('/api/workspaces/:id/data-export', requireAuth, asyncHandler(async (req, res) => {
+    const user = getSessionUser(req);
+    if (!user) {
+      return res.status(401).json({ ok: false, error: "Authentication required" });
+    }
+
+    const { id } = req.params as { id: string };
+
+    if (!admin) {
+      return res.status(503).json({ ok: false, error: "Export not available without database" });
+    }
+
+    try {
+      const data = await exportWorkspaceData(id);
+
+      // Erstelle ZIP-File (vereinfacht - nur JSON)
+      const filename = `skerry-workspace-data-${id}-${new Date().toISOString().split('T')[0]}.json`;
+      
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.json(data);
+
+      // Audit Log
+      await logAudit({
+        workspaceId: id,
+        userId: user.id,
+        action: 'workspace.data_exported',
+        resourceType: 'workspace',
+        resourceId: id,
+        metadata: {
+          exportDate: data.exportDate,
+          leadsCount: data.leads.length,
+          emailsCount: data.emails.length
+        }
+      });
+
+    } catch (err) {
+      logEvent("error", "workspace_export_failed", {
+        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+        workspaceId: id,
+        error: String(err),
+      });
+      return res.status(500).json({ 
+        ok: false, 
+        error: "Failed to export workspace data" 
+      });
+    }
+  }));
+
+  // ──────────── /api/workspaces/:id/delete
+  app.delete('/api/workspaces/:id/delete', requireAuth, asyncHandler(async (req, res) => {
+    const user = getSessionUser(req);
+    if (!user) {
+      return res.status(401).json({ ok: false, error: "Authentication required" });
+    }
+
+    const { id } = req.params as { id: string };
+    const { confirmation } = req.body as { confirmation: string };
+
+    if (confirmation !== "DELETE_WORKSPACE") {
+      return res.status(400).json({ 
+        ok: false, 
+        error: "Confirmation required. Send { confirmation: 'DELETE_WORKSPACE' }" 
+      });
+    }
+
+    if (!admin) {
+      return res.status(503).json({ ok: false, error: "Delete not available without database" });
+    }
+
+    try {
+      // Audit Log vor Löschung
+      await logAudit({
+        workspaceId: id,
+        userId: user.id,
+        action: 'workspace.deleted',
+        resourceType: 'workspace',
+        resourceId: id,
+        metadata: {
+          deletedBy: user.email,
+          deletedAt: new Date().toISOString()
+        }
+      });
+
+      await deleteWorkspace(id);
+
+      return res.json({ 
+        ok: true, 
+        message: "Workspace and all data deleted permanently" 
+      });
+
+    } catch (err) {
+      logEvent("error", "workspace_delete_failed", {
+        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+        workspaceId: id,
+        error: String(err),
+      });
+      return res.status(500).json({ 
+        ok: false, 
+        error: "Failed to delete workspace" 
+      });
+    }
+  }));
+
+  // ──────────── /api/workspaces/:id/brand (public endpoint)
+  app.get('/api/workspaces/:id/brand', asyncHandler(async (req, res) => {
+    const { id } = req.params as { id: string };
+
+    if (!admin) {
+      return res.json({ 
+        ok: true, 
+        brand: {
+          brand_name: "Skerry",
+          brand_logo_url: "",
+          brand_primary_color: "#06b6d4",
+          custom_domain: "",
+          from_email: "Skerry <onboarding@resend.dev>"
+        }
+      });
+    }
+
+    try {
+      const { data, error } = await admin
+        .from('workspaces')
+        .select('brand_name, brand_logo_url, brand_primary_color, custom_domain, from_email')
+        .eq('id', id)
+        .single();
+
+      if (error || !data) {
+        return res.status(404).json({ ok: false, error: "Workspace not found" });
+      }
+
+      return res.json({ 
+        ok: true, 
+        brand: {
+          brand_name: data.brand_name || "Skerry",
+          brand_logo_url: data.brand_logo_url || "",
+          brand_primary_color: data.brand_primary_color || "#06b6d4",
+          custom_domain: data.custom_domain || "",
+          from_email: data.from_email || "Skerry <onboarding@resend.dev>"
+        }
+      });
+    } catch (err) {
+      logEvent("error", "brand_fetch_failed", {
+        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+        workspaceId: id,
+        error: String(err),
+      });
+      return res.status(500).json({ 
+        ok: false, 
+        error: "Failed to fetch brand settings" 
+      });
+    }
+  }));
+
+  // ──────────── /api/webhooks/resend
+  app.post('/api/webhooks/resend', asyncHandler(async (req, res) => {
+    const signature = req.headers['resend-signature'] as string;
+    const secret = process.env.RESEND_WEBHOOK_SECRET;
+
+    if (!secret || !signature) {
+      return res.status(401).json({ ok: false, error: 'Missing signature or secret' });
+    }
+
+    const payload = JSON.stringify(req.body);
+    if (!validateResendWebhook(payload, signature, secret)) {
+      return res.status(401).json({ ok: false, error: 'Invalid signature' });
+    }
+
+    const events = req.body as any[];
+    if (!Array.isArray(events)) {
+      return res.status(400).json({ ok: false, error: 'Invalid payload format' });
+    }
+
+    const result = await handleResendWebhook(events);
+    
+    logEvent('info', 'resend_webhook_processed', {
+      totalEvents: events.length,
+      processed: result.processed,
+      errors: result.errors
+    });
+
+    return res.json({ ok: true, processed: result.processed, errors: result.errors });
+  }));
+
+  // ──────────── /api/email/verify
+  app.post(
+    "/api/email/verify",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const parsed = verifyEmailSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ ok: false, error: "email required" });
+      }
+      const { email } = parsed.data as VerifyEmailBody;
+      const neverbounceKey = process.env.NEVERBOUNCE_API_KEY;
+      if (!neverbounceKey) {
+        return res.json({ ok: true, valid: true, status: "format_only" });
+      }
+      try {
+        const url = `https://api.neverbounce.com/v4/single/check?key=${encodeURIComponent(neverbounceKey)}&email=${encodeURIComponent(email)}`;
+        const resp = await fetchWithTimeoutRetry(
+          url,
+          { method: "GET" },
+          {
+            timeoutMs: PROVIDER_TIMEOUT_MS,
+            retries: PROVIDER_RETRIES,
+            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+            provider: "neverbounce",
+          }
+        );
+        const json = (await resp.json()) as {
+          result?: string;
+          status?: string;
+          message?: string;
+        };
+        const result = json.result ?? json.status ?? "unknown";
+        const verified = result === "valid" || result === "catchall";
+        // NeverBounce returns "general_failure" with a message when credits run out
+        // or the account is misconfigured. Don't block the send — fall back to format-only.
+        if (result === "general_failure") {
+          return res.json({
+            ok: true,
+            valid: true,
+            status: "format_only",
+            warning: json.message ?? "neverbounce general_failure",
+          });
+        }
+        return res.json({ ok: true, valid: verified, status: result });
+      } catch (err) {
+        return res.json({
+          ok: true,
+          valid: true,
+          status: "format_only",
+          warning: clientSafeWarning(err),
+        });
+      }
+    })
+  );
+
+  // ──────────── /api/email/send (Resend; falls back to dry-run if no key)
+  app.post(
+    "/api/email/send",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const parsed = sendEmailSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "to + bodyMarkdown required" });
+      }
+      const { to, subject, bodyMarkdown } = parsed.data as SendEmailBody;
+      const resendKey = process.env.RESEND_API_KEY;
+      const from =
+        process.env.SKERRY_FROM_EMAIL ?? "Skerry <onboarding@resend.dev>";
+      const { subject: parsedSubject, body } =
+        extractSubjectAndBody(bodyMarkdown);
+      const finalSubject = subject || parsedSubject;
+
+      if (!resendKey) {
+        logEvent("info", "email_send_dry_run", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          to,
+          subject: finalSubject,
+        });
+        return res.json({ ok: true, dryRun: true, id: `dryrun_${Date.now()}` });
+      }
+
+      try {
+        const resp = await fetchWithTimeoutRetry(
+          "https://api.resend.com/emails",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${resendKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              from,
+              to,
+              subject: finalSubject,
+              html: mdToHtml(body),
+              text: mdToText(body),
+            }),
+          },
+          {
+            timeoutMs: PROVIDER_TIMEOUT_MS,
+            retries: PROVIDER_RETRIES,
+            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+            provider: "resend",
+          }
+        );
+        const json = (await resp.json()) as { id?: string; message?: string };
+        if (!resp.ok) {
+          return res
+            .status(502)
+            .json({ ok: false, error: json.message ?? "send failed" });
+        }
+        return res.json({ ok: true, id: json.id });
+      } catch (err) {
+        logEvent("error", "email_send_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          error: String(err),
+        });
+        return res.status(502).json({ ok: false, error: clientSafeError(err) });
+      }
+    })
+  );
+
+  // Static SPA in production. In dev, Vite serves the SPA on its own port.
+  const staticPath =
+    process.env.NODE_ENV === "production"
+      ? path.resolve(__dirname, "public")
+      : path.resolve(__dirname, "..", "dist", "public");
+  const indexPath = path.join(staticPath, "index.html");
+  app.use(express.static(staticPath));
+  app.get("*", (req, res, next) => {
+    if (process.env.NODE_ENV !== "production" && !fs.existsSync(indexPath)) {
+      return res.redirect(302, `http://localhost:3000${req.originalUrl}`);
+    }
+    res.sendFile(indexPath, err => {
+      if (err) next(err);
+    });
+  });
+
+  app.use(
+    (
+      err: unknown,
+      req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction
+    ) => {
+      const requestId =
+        (req as RequestWithContext).ctx?.requestId ??
+        req.get("x-request-id") ??
+        makeRequestId();
+      const withStatus = err as { status?: number; statusCode?: number };
+      const fromStatus =
+        typeof withStatus.status === "number"
+          ? withStatus.status
+          : typeof withStatus.statusCode === "number"
+            ? withStatus.statusCode
+            : undefined;
+      const status =
+        fromStatus !== undefined && fromStatus >= 400 && fromStatus < 600
+          ? fromStatus
+          : err instanceof SyntaxError
+            ? 400
+            : 500;
+      if (status >= 500) {
+        logEvent("error", "unhandled_route_error", {
+          requestId,
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+      }
+      if (!res.headersSent) {
+        const exposeDetail = process.env.NODE_ENV !== "production";
+        const message =
+          status === 400
+            ? "Invalid request body."
+            : exposeDetail && err instanceof Error
+              ? err.message
+              : exposeDetail
+                ? String(err)
+                : "Internal server error.";
+        res.status(status).json({ ok: false, error: message, requestId });
+      }
+    }
+  );
+
+  return app;
+}
+
+async function startServer() {
+  const app = await buildApp();
+  const server = createServer(app);
+  const port = Number(process.env.PORT ?? 3001);
+  server.listen(port, () => {
+    console.log(`Skerry server: http://localhost:${port}/`);
+    console.log(`Health: http://localhost:${port}/api/health`);
+    console.log(`Ready: http://localhost:${port}/api/ready`);
+    logEvent("info", "server_started", { port: port });
+    
+    // Start background jobs
+    startSequenceRunner();
+    startGdprProcessor();
+  });
+}
+
+const isEntrypoint = process.argv[1]
+  ? path.resolve(process.argv[1]) === __filename
+  : false;
+if (isEntrypoint) {
+  startServer().catch(console.error);
+}
