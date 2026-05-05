@@ -97,7 +97,7 @@ export function AppSidebar() {
               <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
                 Skerry
               </span>
-              <span className="text-sm font-semibold text-gradient-cyber">
+              <span className="text-sm font-semibold text-gradient-brand">
                 LeadGen OS
               </span>
             </div>

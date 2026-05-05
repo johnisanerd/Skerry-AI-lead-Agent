@@ -90,24 +90,25 @@ export function Shell() {
   return (
     <SidebarProvider>
       <div className="fixed inset-0 grid-bg pointer-events-none opacity-40 z-0" />
+      <div className="fixed inset-0 aura-bg pointer-events-none opacity-60 dark:opacity-25 z-0" />
       <div className="relative z-10 flex min-h-screen w-full text-foreground">
         <AppSidebar />
         <div className="flex flex-1 flex-col">
-          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-white/5 bg-[#050505]/70 px-5 backdrop-blur-xl">
+          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-white/5 bg-[#050505] px-5 text-white">
             <div className="flex items-center gap-3">
-              <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
+              <SidebarTrigger className="text-white/70 hover:text-white" />
               <div className="hidden h-6 w-px bg-white/10 md:block" />
               <div className="hidden flex-col leading-none md:flex">
-                <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                <span className="text-[10px] uppercase tracking-[0.22em] text-white/60">
                   {t("shell.eyebrow")}
                 </span>
-                <span className="text-xs font-medium text-foreground/90">
+                <span className="text-xs font-medium text-white/90">
                   {t("shell.title")}
                 </span>
               </div>
             </div>
             <div className="flex items-center gap-4">
-              <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-muted-foreground sm:flex">
+              <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-white/70 sm:flex">
                 <span className="relative flex h-1.5 w-1.5">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
                   <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
@@ -127,7 +128,7 @@ export function Shell() {
                 <DropdownMenuTrigger asChild>
                   <button className="flex items-center gap-2 pl-2 border-l border-white/10 hover:opacity-80 transition">
                     <div className="hidden flex-col items-end leading-none sm:flex">
-                      <span className="text-[10px] font-medium text-foreground">
+                      <span className="text-[10px] font-medium text-white">
                         {user?.name ?? "User"}
                       </span>
                       <div className="flex items-center gap-1 mt-0.5">

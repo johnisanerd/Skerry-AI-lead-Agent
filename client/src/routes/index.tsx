@@ -112,7 +112,6 @@ function PulseDashboard() {
     <div className="space-y-10">
       {/* Hero */}
       <section className="relative overflow-hidden rounded-2xl glass-strong p-8">
-        <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-gradient-to-br from-purple-500/30 to-fuchsia-500/10 blur-3xl" />
         <div className="relative flex flex-col gap-3">
           <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
             <span className="h-1 w-1 rounded-full bg-purple-300" />
@@ -144,12 +143,9 @@ function PulseDashboard() {
               whileHover={{ y: -2 }}
               className="group relative overflow-hidden rounded-xl glass p-5 transition hover:shadow-[0_0_40px_-12px_oklch(0.78_0.18_220_/_0.5)]"
             >
-              <div
-                className={`absolute -right-10 -top-10 h-32 w-32 rounded-full bg-gradient-to-br ${c.accent} blur-2xl opacity-70`}
-              />
               <div className="relative flex items-center justify-between">
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 ring-1 ring-white/10">
-                  <Icon className="h-4 w-4 text-purple-300" />
+                  <Icon className="h-4 w-4 text-primary dark:text-purple-300" />
                 </div>
               </div>
               <div className="relative mt-6">
@@ -159,7 +155,7 @@ function PulseDashboard() {
                 <div className="mt-1 text-xs uppercase tracking-wider text-muted-foreground">
                   {label}
                 </div>
-                <div className="mt-2 text-xs text-purple-300/80">
+                <div className="mt-2 text-xs text-primary/80 dark:text-purple-300/80">
                   {c.metric}
                 </div>
               </div>
@@ -292,7 +288,6 @@ function PulseDashboard() {
           </div>
 
           <div className="relative overflow-hidden rounded-xl glass p-6">
-            <div className="absolute -bottom-12 -right-10 h-40 w-40 rounded-full bg-purple-400/20 blur-3xl" />
             <h3 className="text-sm font-semibold">{t("pulse.focus.title")}</h3>
             <p className="mt-1 text-xs text-muted-foreground">
               {isEmpty
@@ -310,7 +305,6 @@ function PulseDashboard() {
 
           {tier === "team" && !isEmpty && (
             <div className="relative overflow-hidden rounded-xl glass p-6">
-              <div className="absolute -bottom-12 -right-10 h-40 w-40 rounded-full bg-blue-400/20 blur-3xl" />
               <h3 className="text-sm font-semibold">Team Activity</h3>
               <p className="mt-1 text-xs text-muted-foreground">
                 Shared pipeline with team members

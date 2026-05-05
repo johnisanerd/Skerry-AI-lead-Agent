@@ -94,21 +94,21 @@ function BillingPage() {
     <div className="mx-auto max-w-5xl p-8 space-y-8">
       <div className="space-y-4">
         <h1 className="text-4xl font-bold">{t("billing.title")}</h1>
-        <p className="max-w-3xl text-white/70">{t("billing.subtitle")}</p>
+        <p className="max-w-3xl text-muted-foreground">{t("billing.subtitle")}</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
         {billingPlans.map(plan => (
           <div
             key={plan.id}
-            className={`rounded-3xl border p-6 shadow-sm transition ${plan.highlight ? "border-purple-500/30 bg-purple-500/5 shadow-purple-500/10" : "border-white/10 bg-white/5"}`}
+            className={`rounded-3xl border p-6 shadow-sm transition ${plan.highlight ? "border-primary/30 bg-primary/5 shadow-primary/10" : "border-border bg-card"}`}
           >
             <div className="flex items-center justify-between gap-4">
               <div>
                 <h3 className="text-xl font-semibold">
                   {t(`billing.plan.${plan.id}.title`)}
                 </h3>
-                <p className="mt-2 text-sm text-white/60">
+                <p className="mt-2 text-sm text-muted-foreground">
                   {t(`billing.plan.${plan.id}.description`)}
                 </p>
               </div>
@@ -117,7 +117,7 @@ function BillingPage() {
             <div className="mt-6 space-y-3 text-sm text-muted-foreground">
               {plan.featureKeys.map(featureKey => (
                 <div key={featureKey} className="flex items-center gap-2">
-                  <span className="inline-flex h-2.5 w-2.5 rounded-full bg-purple-400" />
+                  <span className="inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
                   <span>{t(featureKey)}</span>
                 </div>
               ))}
@@ -138,7 +138,7 @@ function BillingPage() {
         ))}
       </div>
 
-      <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
+      <div className="rounded-3xl border border-border bg-card p-6">
         <h2 className="text-2xl font-semibold">
           {t("billing.enterprise.title")}
         </h2>
@@ -146,7 +146,7 @@ function BillingPage() {
           {t("billing.enterprise.subtitle")}
         </p>
         <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          <div className="rounded-2xl bg-white/5 p-4">
+          <div className="rounded-2xl bg-muted/40 p-4">
             <h3 className="text-sm font-semibold">
               {t("billing.enterprise.collabTitle")}
             </h3>
@@ -154,7 +154,7 @@ function BillingPage() {
               {t("billing.enterprise.collabDesc")}
             </p>
           </div>
-          <div className="rounded-2xl bg-white/5 p-4">
+          <div className="rounded-2xl bg-muted/40 p-4">
             <h3 className="text-sm font-semibold">
               {t("billing.enterprise.opsTitle")}
             </h3>
