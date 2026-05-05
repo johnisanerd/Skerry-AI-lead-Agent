@@ -4,10 +4,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { History, Download, Filter, Search, User, Mail, Database, Settings, CreditCard, FileSpreadsheet } from "lucide-react";
+import {
+  History,
+  Download,
+  Filter,
+  Search,
+  User,
+  Mail,
+  Database,
+  Settings,
+  CreditCard,
+  FileSpreadsheet,
+} from "lucide-react";
+import { useWorkspaceStore } from "@/store/workspaceStore";
 
 export const Route = createFileRoute("/settings/audit")({
   component: AuditPage,
@@ -24,49 +42,52 @@ interface AuditLog {
 }
 
 const ACTION_TYPES = [
-  { value: '', label: 'Alle Aktionen' },
-  { value: 'lead.discovered', label: 'Lead Discovery' },
-  { value: 'email.sent', label: 'Email gesendet' },
-  { value: 'email.failed', label: 'Email fehlgeschlagen' },
-  { value: 'lead.deleted', label: 'Lead gelöscht' },
-  { value: 'plan.upgraded', label: 'Plan geändert' },
-  { value: 'workspace.settings_changed', label: 'Workspace Einstellungen' },
-  { value: 'sequence.created', label: 'Sequence erstellt' },
-  { value: 'lead.enrolled', label: 'Lead eingeschrieben' },
-  { value: 'leads.exported', label: 'Export durchgeführt' },
+  { value: "", label: "Alle Aktionen" },
+  { value: "lead.discovered", label: "Lead Discovery" },
+  { value: "email.sent", label: "Email gesendet" },
+  { value: "email.failed", label: "Email fehlgeschlagen" },
+  { value: "lead.deleted", label: "Lead gelöscht" },
+  { value: "plan.upgraded", label: "Plan geändert" },
+  { value: "workspace.settings_changed", label: "Workspace Einstellungen" },
+  { value: "sequence.created", label: "Sequence erstellt" },
+  { value: "lead.enrolled", label: "Lead eingeschrieben" },
+  { value: "leads.exported", label: "Export durchgeführt" },
 ];
 
 const ACTION_ICONS: Record<string, any> = {
-  'lead.discovered': Database,
-  'email.sent': Mail,
-  'email.failed': Mail,
-  'lead.deleted': Database,
-  'plan.upgraded': CreditCard,
-  'workspace.settings_changed': Settings,
-  'sequence.created': Database,
-  'lead.enrolled': Database,
-  'leads.exported': FileSpreadsheet,
+  "lead.discovered": Database,
+  "email.sent": Mail,
+  "email.failed": Mail,
+  "lead.deleted": Database,
+  "plan.upgraded": CreditCard,
+  "workspace.settings_changed": Settings,
+  "sequence.created": Database,
+  "lead.enrolled": Database,
+  "leads.exported": FileSpreadsheet,
 };
 
-function getActionDescription(action: string, metadata: Record<string, any>): string {
+function getActionDescription(
+  action: string,
+  metadata: Record<string, any>
+): string {
   switch (action) {
-    case 'lead.discovered':
+    case "lead.discovered":
       return `${metadata.count || 0} Leads via ${metadata.provider} discovered`;
-    case 'email.sent':
+    case "email.sent":
       return `Email an Lead gesendet: ${metadata.subject}`;
-    case 'email.failed':
+    case "email.failed":
       return `Email fehlgeschlagen: ${metadata.error}`;
-    case 'lead.deleted':
+    case "lead.deleted":
       return `Lead gelöscht: ${metadata.leadName}`;
-    case 'plan.upgraded':
+    case "plan.upgraded":
       return `Plan geändert von ${metadata.fromPlan} zu ${metadata.toPlan}`;
-    case 'workspace.settings_changed':
-      return 'Workspace-Einstellungen geändert';
-    case 'sequence.created':
+    case "workspace.settings_changed":
+      return "Workspace-Einstellungen geändert";
+    case "sequence.created":
       return `Sequence "${metadata.sequenceName}" mit ${metadata.stepsCount} Steps erstellt`;
-    case 'lead.enrolled':
+    case "lead.enrolled":
       return `Lead in Sequence "${metadata.sequenceName}" eingeschrieben`;
-    case 'leads.exported':
+    case "leads.exported":
       return `${metadata.leadCount} Leads als ${metadata.format} exportiert`;
     default:
       return action;
@@ -74,39 +95,49 @@ function getActionDescription(action: string, metadata: Record<string, any>): st
 }
 
 function getActionColor(action: string): string {
-  if (action.includes('failed') || action.includes('deleted')) return 'destructive';
-  if (action.includes('upgraded') || action.includes('created')) return 'default';
-  if (action.includes('sent') || action.includes('discovered')) return 'secondary';
-  return 'outline';
+  if (action.includes("failed") || action.includes("deleted"))
+    return "destructive";
+  if (action.includes("upgraded") || action.includes("created"))
+    return "default";
+  if (action.includes("sent") || action.includes("discovered"))
+    return "secondary";
+  return "outline";
 }
 
 function AuditPage() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedAction, setSelectedAction] = useState('');
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedAction, setSelectedAction] = useState("");
   const [hasMore, setHasMore] = useState(true);
+  const workspaceId = useWorkspaceStore(s => s.currentId);
+  const workspaceHeaders: Record<string, string> = workspaceId
+    ? { "x-workspace-id": workspaceId }
+    : {};
 
   const loadLogs = async (reset = false) => {
     setIsLoading(true);
     try {
       const params = new URLSearchParams({
-        limit: '50',
-        ...(selectedAction && { action: selectedAction })
+        limit: "50",
+        ...(selectedAction && { action: selectedAction }),
       });
 
-      const res = await fetch(`/api/audit/logs?${params}`, { credentials: 'include' });
+      const res = await fetch(`/api/audit/logs?${params}`, {
+        credentials: "include",
+        headers: workspaceHeaders,
+      });
       const data = await res.json();
-      
+
       if (data.ok) {
         const newLogs = reset ? data.logs : [...logs, ...data.logs];
         setLogs(newLogs);
         setHasMore(data.logs.length === 50);
       } else {
-        toast.error('Fehler beim Laden der Audit Logs');
+        toast.error("Fehler beim Laden der Audit Logs");
       }
     } catch (err) {
-      toast.error('Verbindung zum Server fehlgeschlagen');
+      toast.error("Verbindung zum Server fehlgeschlagen");
     } finally {
       setIsLoading(false);
     }
@@ -118,11 +149,12 @@ function AuditPage() {
 
   const filteredLogs = logs.filter(log => {
     if (!searchTerm) return true;
-    
+
     const searchLower = searchTerm.toLowerCase();
     return (
       log.action.toLowerCase().includes(searchLower) ||
-      (log.resource_type && log.resource_type.toLowerCase().includes(searchLower)) ||
+      (log.resource_type &&
+        log.resource_type.toLowerCase().includes(searchLower)) ||
       JSON.stringify(log.metadata).toLowerCase().includes(searchLower)
     );
   });
@@ -130,40 +162,43 @@ function AuditPage() {
   const exportLogs = async () => {
     try {
       const params = new URLSearchParams({
-        format: 'csv',
-        ...(selectedAction && { action: selectedAction })
+        format: "csv",
+        ...(selectedAction && { action: selectedAction }),
       });
 
-      const res = await fetch(`/api/audit/logs/export?${params}`, { credentials: 'include' });
-      
+      const res = await fetch(`/api/audit/logs/export?${params}`, {
+        credentials: "include",
+        headers: workspaceHeaders,
+      });
+
       if (!res.ok) {
-        throw new Error('Export fehlgeschlagen');
+        throw new Error("Export fehlgeschlagen");
       }
 
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
+      const a = document.createElement("a");
+      a.style.display = "none";
       a.href = url;
-      a.download = `skerry-audit-logs-${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = `skerry-audit-logs-${new Date().toISOString().split("T")[0]}.csv`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      toast.success('Audit Logs exportiert');
+      toast.success("Audit Logs exportiert");
     } catch (err) {
-      toast.error('Export fehlgeschlagen');
+      toast.error("Export fehlgeschlagen");
     }
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString('de-DE', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+    return new Date(dateString).toLocaleString("de-DE", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
@@ -172,7 +207,8 @@ function AuditPage() {
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Audit Logs</h1>
         <p className="text-muted-foreground mt-2">
-          Protokoll aller wichtigen Aktionen für Compliance und Nachvollziehbarkeit.
+          Protokoll aller wichtigen Aktionen für Compliance und
+          Nachvollziehbarkeit.
         </p>
       </div>
 
@@ -192,7 +228,7 @@ function AuditPage() {
                 <Input
                   placeholder="Suche in Logs..."
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onChange={e => setSearchTerm(e.target.value)}
                   className="pl-10"
                 />
               </div>
@@ -233,7 +269,9 @@ function AuditPage() {
             {isLoading && logs.length === 0 ? (
               <div className="text-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-                <p className="mt-2 text-muted-foreground">Logs werden geladen...</p>
+                <p className="mt-2 text-muted-foreground">
+                  Logs werden geladen...
+                </p>
               </div>
             ) : filteredLogs.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
@@ -242,17 +280,20 @@ function AuditPage() {
               </div>
             ) : (
               <div className="space-y-4">
-                {filteredLogs.map((log) => {
+                {filteredLogs.map(log => {
                   const IconComponent = ACTION_ICONS[log.action] || History;
                   return (
-                    <div key={log.id} className="flex items-start gap-4 p-4 border rounded-lg">
+                    <div
+                      key={log.id}
+                      className="flex items-start gap-4 p-4 border rounded-lg"
+                    >
                       <div className="mt-1">
                         <IconComponent className="w-4 h-4 text-muted-foreground" />
                       </div>
                       <div className="flex-1 space-y-2">
                         <div className="flex items-center gap-2">
                           <Badge variant={getActionColor(log.action) as any}>
-                            {log.action.replace('.', ' ')}
+                            {log.action.replace(".", " ")}
                           </Badge>
                           {log.resource_type && (
                             <Badge variant="outline" className="text-xs">

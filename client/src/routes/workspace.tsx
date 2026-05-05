@@ -56,13 +56,12 @@ function WorkspacePage() {
   const { leads, selectedId, select, pushToInstantly } = useLeadStore();
   const lead = leads.find(l => l.id === selectedId) ?? leads[0];
   const t = useT();
-  const [showSequenceModal, setShowSequenceModal] = useState(false);
 
   if (!lead) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center text-center px-6">
-        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-cyan-500/10 ring-1 ring-cyan-500/20">
-          <Sparkles className="h-6 w-6 text-cyan-300" />
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-purple-500/10 ring-1 ring-purple-500/20">
+          <Sparkles className="h-6 w-6 text-purple-300" />
         </div>
         <h2 className="text-xl font-semibold text-foreground">
           No leads in your workspace yet
@@ -103,15 +102,17 @@ function WorkspacePage() {
                   onClick={() => select(l.id)}
                   className={`group flex items-center gap-2 rounded-md px-3 py-1.5 text-xs ring-1 transition ${
                     active
-                      ? "bg-white/10 text-foreground ring-cyan-300/40"
+                      ? "bg-white/10 text-foreground ring-purple-300/40"
                       : "bg-white/5 text-muted-foreground ring-white/10 hover:text-foreground"
                   }`}
                 >
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-blue-500/30 to-cyan-300/10 text-[10px] font-semibold text-cyan-100 ring-1 ring-white/10">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-purple-500/30 to-fuchsia-500/10 text-[10px] font-semibold text-purple-100 ring-1 ring-white/10">
                     {l.personal.firstName[0]}
                   </span>
                   {l.personal.firstName} · {l.organization.name}
-                  {active && <ChevronRight className="h-3 w-3 text-cyan-300" />}
+                  {active && (
+                    <ChevronRight className="h-3 w-3 text-purple-300" />
+                  )}
                 </button>
               );
             })}
@@ -167,11 +168,11 @@ function LeadCard({
       layout
       className="col-span-12 lg:col-span-4 relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl"
     >
-      <div className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-cyan-400/15 blur-3xl" />
+      <div className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-purple-400/15 blur-3xl" />
 
       <div className="relative flex items-center gap-4">
         <div className="relative">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500/40 to-cyan-300/20 text-base font-semibold text-cyan-100 ring-1 ring-cyan-300/30">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-purple-500/40 to-fuchsia-500/20 text-base font-semibold text-purple-100 ring-1 ring-purple-300/30">
             {lead.personal.firstName[0]}
             {lead.personal.lastName[0]}
           </div>
@@ -246,7 +247,7 @@ function Row({
   const content = (
     <>
       <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/5 ring-1 ring-white/10">
-        <Icon className="h-3.5 w-3.5 text-cyan-300" />
+        <Icon className="h-3.5 w-3.5 text-purple-300" />
       </div>
       <div className="min-w-0">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -295,7 +296,7 @@ function IntelligenceCenter({
             {t("workspace.intel.title")}
           </div>
         </div>
-        <Sparkles className="h-4 w-4 text-cyan-300" />
+        <Sparkles className="h-4 w-4 text-purple-300" />
       </div>
 
       <div className="mt-4 flex gap-1 rounded-lg bg-black/20 p-1 ring-1 ring-white/5">
@@ -317,7 +318,7 @@ function IntelligenceCenter({
               {active && (
                 <motion.span
                   layoutId="intel-pill"
-                  className="absolute inset-0 -z-10 rounded-md bg-white/8 ring-1 ring-cyan-300/30"
+                  className="absolute inset-0 -z-10 rounded-md bg-white/8 ring-1 ring-purple-300/30"
                   transition={{ type: "spring", stiffness: 400, damping: 32 }}
                 />
               )}
@@ -366,9 +367,9 @@ function IntelligenceCenter({
               {lead.extraction.uniqueAngles.map((a, i) => (
                 <div
                   key={i}
-                  className="group flex items-start gap-3 rounded-lg bg-white/[0.03] p-3 ring-1 ring-white/5 transition hover:ring-cyan-300/30 hover:shadow-[0_0_24px_-10px_oklch(0.78_0.18_220_/_0.5)]"
+                  className="group flex items-start gap-3 rounded-lg bg-white/[0.03] p-3 ring-1 ring-white/5 transition hover:ring-purple-300/30 hover:shadow-[0_0_24px_-10px_oklch(0.74_0.22_305_/_0.45)]"
                 >
-                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-cyan-300/15 text-[10px] font-semibold text-cyan-200 ring-1 ring-cyan-300/30">
+                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-purple-300/15 text-[10px] font-semibold text-purple-200 ring-1 ring-purple-300/30">
                     0{i + 1}
                   </span>
                   <div className="text-sm font-medium text-foreground/90">
@@ -399,6 +400,7 @@ function NewsletterForge({
   const [isEditing, setIsEditing] = useState(false);
   const [editedBody, setEditedBody] = useState(lead.newsletter.body);
   const t = useT();
+  const [showSequenceModal, setShowSequenceModal] = useState(false);
 
   const handlePush = async () => {
     if (!lead.personal.email) {
@@ -420,108 +422,111 @@ function NewsletterForge({
         layout
         className="col-span-12 lg:col-span-4 relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl"
       >
-      <div className="flex items-center justify-between border-b border-white/5 px-5 py-3">
-        <div>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-            {t("workspace.forge.eyebrow")}
+        <div className="flex items-center justify-between border-b border-white/5 px-5 py-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+              {t("workspace.forge.eyebrow")}
+            </div>
+            <div className="mt-0.5 text-sm font-semibold">
+              {lead.newsletter.title}
+            </div>
           </div>
-          <div className="mt-0.5 text-sm font-semibold">
-            {lead.newsletter.title}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsEditing(!isEditing)}
+              className="inline-flex items-center gap-1.5 rounded-md bg-white/5 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-white/10 transition"
+            >
+              {isEditing ? "Done" : "Edit"}
+            </button>
+            <button
+              onClick={handlePush}
+              disabled={status === "sending"}
+              className="group inline-flex items-center gap-2 rounded-md bg-gradient-to-r from-purple-600 to-fuchsia-500 px-3 py-1.5 text-[11px] font-semibold text-white shadow-[0_0_24px_-8px_oklch(0.74_0.22_305_/_0.55)] transition hover:scale-[1.03] disabled:opacity-60 disabled:hover:scale-100"
+            >
+              <AnimatePresence mode="wait" initial={false}>
+                {status === "idle" && (
+                  <motion.span
+                    key="i"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex items-center gap-1.5"
+                  >
+                    <Send className="h-3 w-3" /> {t("workspace.forge.sync")}
+                  </motion.span>
+                )}
+                {status === "sending" && (
+                  <motion.span
+                    key="s"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex items-center gap-1.5"
+                  >
+                    <Loader2 className="h-3 w-3 animate-spin" />{" "}
+                    {t("workspace.forge.pushing")}
+                  </motion.span>
+                )}
+                {status === "sent" && (
+                  <motion.span
+                    key="d"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="h-3 w-3" />{" "}
+                    {t("workspace.forge.synced")}
+                  </motion.span>
+                )}
+                {status === "error" && (
+                  <motion.span
+                    key="e"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex items-center gap-1.5"
+                  >
+                    <AlertTriangle className="h-3 w-3" />{" "}
+                    {t("workspace.forge.missingEmail")}
+                  </motion.span>
+                )}
+              </AnimatePresence>
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsEditing(!isEditing)}
-            className="inline-flex items-center gap-1.5 rounded-md bg-white/5 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-white/10 transition"
-          >
-            {isEditing ? "Done" : "Edit"}
-          </button>
-          <button
-            onClick={handlePush}
-            disabled={status === "sending"}
-            className="group inline-flex items-center gap-2 rounded-md bg-gradient-to-r from-blue-500 to-cyan-400 px-3 py-1.5 text-[11px] font-semibold text-[#03101a] shadow-[0_0_24px_-8px_oklch(0.78_0.18_220_/_0.7)] transition hover:scale-[1.03] disabled:opacity-60 disabled:hover:scale-100"
-          >
-            <AnimatePresence mode="wait" initial={false}>
-              {status === "idle" && (
-                <motion.span
-                  key="i"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="flex items-center gap-1.5"
-                >
-                  <Send className="h-3 w-3" /> {t("workspace.forge.sync")}
-                </motion.span>
-              )}
-              {status === "sending" && (
-                <motion.span
-                  key="s"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="flex items-center gap-1.5"
-                >
-                  <Loader2 className="h-3 w-3 animate-spin" />{" "}
-                  {t("workspace.forge.pushing")}
-                </motion.span>
-              )}
-              {status === "sent" && (
-                <motion.span
-                  key="d"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="flex items-center gap-1.5"
-                >
-                  <CheckCircle2 className="h-3 w-3" />{" "}
-                  {t("workspace.forge.synced")}
-                </motion.span>
-              )}
-              {status === "error" && (
-                <motion.span
-                  key="e"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="flex items-center gap-1.5"
-                >
-                  <AlertTriangle className="h-3 w-3" />{" "}
-                  {t("workspace.forge.missingEmail")}
-                </motion.span>
-              )}
-            </AnimatePresence>
-          </button>
+
+        <div className="px-5 pt-4 text-xs text-muted-foreground">
+          {lead.newsletter.subheading}
         </div>
-      </div>
 
-      <div className="px-5 pt-4 text-xs text-muted-foreground">
-        {lead.newsletter.subheading}
-      </div>
-
-      {isEditing ? (
-        <textarea
-          value={editedBody}
-          onChange={e => setEditedBody(e.target.value)}
-          className="w-full px-5 py-4 pb-6 max-h-[460px] overflow-y-auto bg-white/5 border-none text-sm text-foreground/85 focus:outline-none focus:ring-0 resize-none"
-        />
-      ) : (
-        <article className="prose prose-invert max-w-none px-5 pb-6 pt-2 max-h-[460px] overflow-y-auto prose-headings:tracking-tight prose-h1:text-2xl prose-h1:font-semibold prose-h1:bg-gradient-to-r prose-h1:from-blue-300 prose-h1:to-cyan-200 prose-h1:bg-clip-text prose-h1:text-transparent prose-h2:text-xs prose-h2:uppercase prose-h2:tracking-[0.18em] prose-h2:text-cyan-200/90 prose-p:text-sm prose-p:text-foreground/85 prose-strong:text-cyan-200 prose-blockquote:border-l-cyan-300/40 prose-blockquote:text-foreground/70 prose-blockquote:text-sm prose-hr:border-white/5">
-          <ReactMarkdown>{editedBody}</ReactMarkdown>
-        </article>
-      )}
+        {isEditing ? (
+          <textarea
+            value={editedBody}
+            onChange={e => setEditedBody(e.target.value)}
+            className="w-full px-5 py-4 pb-6 max-h-[460px] overflow-y-auto bg-white/5 border-none text-sm text-foreground/85 focus:outline-none focus:ring-0 resize-none"
+          />
+        ) : (
+          <article className="prose prose-invert max-w-none px-5 pb-6 pt-2 max-h-[460px] overflow-y-auto prose-headings:tracking-tight prose-h1:text-2xl prose-h1:font-semibold prose-h1:bg-gradient-to-r prose-h1:from-purple-300 prose-h1:to-fuchsia-200 prose-h1:bg-clip-text prose-h1:text-transparent prose-h2:text-xs prose-h2:uppercase prose-h2:tracking-[0.18em] prose-h2:text-purple-200/90 prose-p:text-sm prose-p:text-foreground/85 prose-strong:text-purple-200 prose-blockquote:border-l-purple-300/40 prose-blockquote:text-foreground/70 prose-blockquote:text-sm prose-hr:border-white/5">
+            <ReactMarkdown>{editedBody}</ReactMarkdown>
+          </article>
+        )}
       </motion.div>
-      
+
       <div className="col-span-12 lg:col-span-4 mt-4">
         <Button
           onClick={() => setShowSequenceModal(true)}
-          className="w-full bg-gradient-to-r from-purple-500 to-cyan-400 text-white"
+          className="w-full bg-gradient-to-r from-purple-500 to-fuchsia-400 text-white"
         >
           <GitBranch className="w-4 h-4 mr-2" />
           Sequence Engine
         </Button>
       </div>
-      
-      <SequenceModal open={showSequenceModal} onClose={() => setShowSequenceModal(false)} />
+
+      <SequenceModal
+        open={showSequenceModal}
+        onClose={() => setShowSequenceModal(false)}
+      />
     </>
   );
 }

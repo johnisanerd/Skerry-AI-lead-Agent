@@ -1,4 +1,5 @@
 ## Vor dem ersten Demo mit einem echten Kunden
+
 - [ ] SESSION_SECRET gesetzt (min. 32 Zeichen)
 - [ ] APOLLO_API_KEY gesetzt (kostenlos: apollo.io → Settings → API)
 - [ ] OPENAI_API_KEY gesetzt ($10 bereits vorhanden)
@@ -6,16 +7,10 @@
 - [ ] Erster echter Discovery-Test: ICP definieren → Find Leads → echte Profile erscheinen
 
 ## Vor dem ersten zahlenden Kunden
+
 - [ ] SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY gesetzt
 - [ ] VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY gesetzt
-- [ ] Alle Supabase-Migrationen ausgeführt:
-      - 20250503000000_skerry_core.sql
-      - 20250505000000_sequences.sql
-      - 20250505000001_intent_scoring.sql
-      - 20250505000002_ab_testing.sql
-      - 20250505000003_white_label.sql
-      - 20250505000004_audit_log.sql
-      - 20250505000005_gdpr_compliance.sql
+- [ ] Alle Supabase-Migrationen ausgeführt: - 20250503000000_skerry_core.sql - 20250505000000_sequences.sql - 20250505000001_intent_scoring.sql - 20250505000002_ab_testing.sql - 20250505000003_white_label.sql - 20250505000004_audit_log.sql - 20250505000005_gdpr_compliance.sql
 - [ ] RESEND_API_KEY gesetzt + Domain verifiziert
 - [ ] NEVERBOUNCE_API_KEY gesetzt (optional)
 - [ ] STRIPE_SECRET_KEY gesetzt + Preise in Stripe angelegt
@@ -28,6 +23,7 @@
       ICP → Apollo Discovery → OpenAI Enrichment → Email-Draft → Send
 
 ## Enterprise-Ready Features (für Agentur-Kunden)
+
 - [ ] Sequence Engine getestet: Sequences erstellen → Leads einschreiben → Follow-ups automatisch
 - [ ] Reply Detection funktioniert: Email Events → Intent Score → Sequence pausiert bei Antwort
 - [ ] A/B Testing aktiv: 2+ Varianten → 50+ Sends → Gewinner automatisch promoted
@@ -37,6 +33,7 @@
 - [ ] GDPR-Compliance: Löschanträge, Datenexport, 30-Tage Fristen funktionieren
 
 ## Security & Compliance
+
 - [ ] Alle API-Routes haben Zod-Validierung
 - [ ] Alle Fehler haben strukturierte code + message Objekte
 - [ ] synthesizeServerLeads() wird nur in /api/dev/seed verwendet
@@ -47,6 +44,7 @@
 - [ ] HTTPS enforced in Production (SKERRY_ALLOWED_ORIGINS)
 
 ## Performance & Monitoring
+
 - [ ] Background Jobs laufen: Sequence Runner (5min), GDPR Processor (24h)
 - [ ] Database Indexes vorhanden für schnelle Queries
 - [ ] /api/health zeigt alle Service-Status korrekt
@@ -55,6 +53,7 @@
 - [ ] Error Logging funktioniert (logEvent)
 
 ## Deployment Checklist
+
 - [ ] Environment Variables komplett:
       DATABASE_URL (PostgreSQL für Entitlements)
       SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY

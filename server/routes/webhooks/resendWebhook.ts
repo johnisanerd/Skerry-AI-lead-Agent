@@ -4,11 +4,19 @@
  * Env: SUPABASE_URL, RESEND_API_KEY
  */
 
-import { admin } from '../../supabaseAdmin.js';
-import { calculateIntentScore } from '../../pipeline/intentScorer.js';
+import { admin } from "../../supabaseAdmin.js";
+import { calculateIntentScore } from "../../pipeline/intentScorer.js";
+import { logEvent, makeRequestId } from "../../lib/logger.js";
 
 interface ResendWebhookEvent {
-  type: 'delivered' | 'opened' | 'clicked' | 'bounced' | 'complained' | 'unsubscribed' | 'replied';
+  type:
+    | "delivered"
+    | "opened"
+    | "clicked"
+    | "bounced"
+    | "complained"
+    | "unsubscribed"
+    | "replied";
   created_at: string;
   data: {
     from: string;
@@ -26,12 +34,15 @@ interface ResendWebhookEvent {
 /**
  * Verarbeitet Resend Webhook Events
  */
-export async function handleResendWebhook(events: ResendWebhookEvent[]): Promise<{ processed: number; errors: number }> {
+export async function handleResendWebhook(
+  events: ResendWebhookEvent[]
+): Promise<{ processed: number; errors: number }> {
   let processed = 0;
   let errors = 0;
+  const requestId = makeRequestId();
 
   if (!admin) {
-    console.error('Supabase admin client not configured for webhook processing');
+    logEvent("error", "resend_webhook_no_admin", { requestId });
     return { processed: 0, errors: events.length };
   }
 
@@ -39,13 +50,17 @@ export async function handleResendWebhook(events: ResendWebhookEvent[]): Promise
     try {
       // Finde den entsprechenden Email-Send Record
       const { data: emailSend, error: emailSendError } = await admin
-        .from('email_sends')
-        .select('id, lead_id, workspace_id, events')
-        .eq('provider_message_id', event.data.email_id)
+        .from("email_sends")
+        .select("id, lead_id, workspace_id, events")
+        .eq("provider_message_id", event.data.email_id)
         .single();
 
       if (emailSendError || !emailSend) {
-        console.warn(`Email send not found for message_id: ${event.data.email_id}`);
+        logEvent("warn", "resend_webhook_email_send_not_found", {
+          requestId,
+          emailId: event.data.email_id,
+          eventType: event.type,
+        });
         errors++;
         continue;
       }
@@ -59,23 +74,28 @@ export async function handleResendWebhook(events: ResendWebhookEvent[]): Promise
           ip: event.data.ip,
           userAgent: event.data.user_agent,
           url: event.data.url,
-        }
+        },
       };
 
       const updatedEvents = [...existingEvents, newEvent];
 
       // Update Email-Send Record
       const { error: updateError } = await admin
-        .from('email_sends')
+        .from("email_sends")
         .update({
           events: updatedEvents,
           status: mapEventToStatus(event.type),
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
-        .eq('id', emailSend.id);
+        .eq("id", emailSend.id);
 
       if (updateError) {
-        console.error('Failed to update email send:', updateError);
+        logEvent("error", "resend_webhook_email_send_update_failed", {
+          requestId,
+          emailSendId: emailSend.id,
+          emailId: event.data.email_id,
+          error: String(updateError),
+        });
         errors++;
         continue;
       }
@@ -84,14 +104,18 @@ export async function handleResendWebhook(events: ResendWebhookEvent[]): Promise
       await updateLeadIntentScore(emailSend.lead_id, event.type);
 
       // Wenn Reply detected -> Sequence Enrollment pausieren
-      if (event.type === 'replied') {
+      if (event.type === "replied") {
         await pauseSequenceEnrollments(emailSend.lead_id);
       }
 
       processed++;
-
     } catch (err) {
-      console.error('Error processing webhook event:', err);
+      logEvent("error", "resend_webhook_event_failed", {
+        requestId,
+        emailId: event.data.email_id,
+        eventType: event.type,
+        error: err instanceof Error ? err.message : String(err),
+      });
       errors++;
     }
   }
@@ -104,29 +128,39 @@ export async function handleResendWebhook(events: ResendWebhookEvent[]): Promise
  */
 function mapEventToStatus(eventType: string): string {
   switch (eventType) {
-    case 'delivered': return 'delivered';
-    case 'opened': return 'opened';
-    case 'clicked': return 'clicked';
-    case 'bounced': return 'bounced';
-    case 'complained': return 'bounced';
-    case 'unsubscribed': return 'bounced';
-    default: return 'pending';
+    case "delivered":
+      return "delivered";
+    case "opened":
+      return "opened";
+    case "clicked":
+      return "clicked";
+    case "bounced":
+      return "bounced";
+    case "complained":
+      return "bounced";
+    case "unsubscribed":
+      return "bounced";
+    default:
+      return "pending";
   }
 }
 
 /**
  * Updated den Intent Score eines Leads basierend auf Events
  */
-async function updateLeadIntentScore(leadId: string, eventType: string): Promise<void> {
+async function updateLeadIntentScore(
+  leadId: string,
+  eventType: string
+): Promise<void> {
   if (!admin) return;
 
   try {
     // Hole alle Events für diesen Lead
     const { data: emailSends } = await admin
-      .from('email_sends')
-      .select('events, created_at')
-      .eq('lead_id', leadId)
-      .order('created_at', { ascending: false });
+      .from("email_sends")
+      .select("events, created_at")
+      .eq("lead_id", leadId)
+      .order("created_at", { ascending: false });
 
     if (!emailSends || emailSends.length === 0) return;
 
@@ -143,16 +177,21 @@ async function updateLeadIntentScore(leadId: string, eventType: string): Promise
     // Update Lead
     const latestEvent = allEvents[allEvents.length - 1];
     await admin
-      .from('leads')
+      .from("leads")
       .update({
         intent_score: score,
         last_event: latestEvent?.type || null,
-        last_event_at: latestEvent?.createdAt ? new Date(latestEvent.createdAt).toISOString() : null
+        last_event_at: latestEvent?.createdAt
+          ? new Date(latestEvent.createdAt).toISOString()
+          : null,
       })
-      .eq('id', leadId);
-
+      .eq("id", leadId);
   } catch (err) {
-    console.error('Failed to update lead intent score:', err);
+    logEvent("error", "lead_intent_score_update_failed", {
+      requestId: makeRequestId(),
+      leadId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -164,38 +203,53 @@ async function pauseSequenceEnrollments(leadId: string): Promise<void> {
 
   try {
     const { error } = await admin
-      .from('sequence_enrollments')
+      .from("sequence_enrollments")
       .update({
-        status: 'replied',
-        updated_at: new Date().toISOString()
+        status: "replied",
+        updated_at: new Date().toISOString(),
       })
-      .eq('lead_id', leadId)
-      .eq('status', 'active');
+      .eq("lead_id", leadId)
+      .eq("status", "active");
 
     if (error) {
-      console.error('Failed to pause sequence enrollments:', error);
+      logEvent("error", "sequence_enrollments_pause_failed", {
+        requestId: makeRequestId(),
+        leadId,
+        error: String(error),
+      });
     }
   } catch (err) {
-    console.error('Failed to pause sequence enrollments:', err);
+    logEvent("error", "sequence_enrollments_pause_failed", {
+      requestId: makeRequestId(),
+      leadId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
 /**
  * Validiert Resend Webhook Signature
  */
-export function validateResendWebhook(payload: string, signature: string, secret: string): boolean {
+export function validateResendWebhook(
+  payload: string,
+  signature: string,
+  secret: string
+): boolean {
   try {
-    const crypto = require('crypto');
-    const hmac = crypto.createHmac('sha256', secret);
+    const crypto = require("crypto");
+    const hmac = crypto.createHmac("sha256", secret);
     hmac.update(payload);
-    const expectedSignature = hmac.digest('base64');
-    
+    const expectedSignature = hmac.digest("base64");
+
     return crypto.timingSafeEqual(
       Buffer.from(signature),
       Buffer.from(expectedSignature)
     );
   } catch (err) {
-    console.error('Webhook signature validation failed:', err);
+    logEvent("warn", "resend_webhook_signature_validation_failed", {
+      requestId: makeRequestId(),
+      error: err instanceof Error ? err.message : String(err),
+    });
     return false;
   }
 }

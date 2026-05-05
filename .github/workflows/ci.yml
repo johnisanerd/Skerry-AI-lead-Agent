@@ -12,6 +12,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Block committed env files
+        run: |
+          bad=$(git ls-files | grep -E '(^|/)\.env($|\.)' || true)
+          if [ -n "$bad" ]; then
+            echo "dotenv files must not be committed:"
+            echo "$bad"
+            exit 1
+          fi
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:

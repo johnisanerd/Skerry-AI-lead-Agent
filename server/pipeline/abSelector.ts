@@ -4,11 +4,12 @@
  * Env: SUPABASE_URL
  */
 
-import { admin } from '../supabaseAdmin.js';
+import { admin } from "../supabaseAdmin.js";
+import { logEvent, makeRequestId } from "../lib/logger.js";
 
 export interface EmailVariant {
   id: string;
-  weight: number;           // 0-100, Summe aller Varianten = 100
+  weight: number; // 0-100, Summe aller Varianten = 100
   subjectTemplate: string;
   bodyTemplate: string;
 }
@@ -31,7 +32,7 @@ export interface ABTest {
   sequenceId: string;
   stepNumber: number;
   variants: EmailVariant[];
-  status: 'active' | 'completed';
+  status: "active" | "completed";
   winnerVariantId?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -43,14 +44,14 @@ export interface ABTest {
 export function selectVariant(variants: EmailVariant[]): EmailVariant {
   const totalWeight = variants.reduce((sum, v) => sum + v.weight, 0);
   let random = Math.random() * totalWeight;
-  
+
   for (const variant of variants) {
     random -= variant.weight;
     if (random <= 0) {
       return variant;
     }
   }
-  
+
   // Fallback (sollte nie passieren)
   return variants[0];
 }
@@ -64,35 +65,49 @@ export async function recordVariantSelection(
   abTestId: string
 ): Promise<void> {
   if (!admin) return;
+  const requestId = makeRequestId();
 
   try {
     await admin
-      .from('email_sends')
+      .from("email_sends")
       .update({
         ab_test_id: abTestId,
-        variant_id: variantId
+        variant_id: variantId,
       })
-      .eq('id', emailSendId);
+      .eq("id", emailSendId);
   } catch (err) {
-    console.error('Failed to record variant selection:', err);
+    logEvent("error", "ab_variant_selection_record_failed", {
+      requestId,
+      emailSendId,
+      abTestId,
+      variantId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
 /**
  * Berechnet A/B Test Performance für alle Varianten
  */
-export async function calculateABTestPerformance(abTestId: string): Promise<ABTestResult[]> {
+export async function calculateABTestPerformance(
+  abTestId: string
+): Promise<ABTestResult[]> {
   if (!admin) return [];
+  const requestId = makeRequestId();
 
   try {
     // Hole alle Email-Sends für diesen A/B Test
     const { data: emailSends, error } = await admin
-      .from('email_sends')
-      .select('variant_id, events, created_at')
-      .eq('ab_test_id', abTestId);
+      .from("email_sends")
+      .select("variant_id, events, created_at")
+      .eq("ab_test_id", abTestId);
 
     if (error || !emailSends) {
-      console.error('Failed to fetch A/B test data:', error);
+      logEvent("error", "ab_test_data_fetch_failed", {
+        requestId,
+        abTestId,
+        error: String(error),
+      });
       return [];
     }
 
@@ -101,7 +116,7 @@ export async function calculateABTestPerformance(abTestId: string): Promise<ABTe
     for (const send of emailSends) {
       const variantId = send.variant_id;
       if (!variantId) continue;
-      
+
       if (!variantGroups[variantId]) {
         variantGroups[variantId] = [];
       }
@@ -116,9 +131,12 @@ export async function calculateABTestPerformance(abTestId: string): Promise<ABTe
     }
 
     return results.sort((a, b) => b.intentScore - a.intentScore);
-
   } catch (err) {
-    console.error('Failed to calculate A/B test performance:', err);
+    logEvent("error", "ab_test_performance_failed", {
+      requestId,
+      abTestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [];
   }
 }
@@ -136,10 +154,10 @@ async function calculateVariantPerformance(
 
   for (const send of emailSends) {
     const events = (send.events as any[]) || [];
-    
-    if (events.some(e => e.type === 'opened')) opens++;
-    if (events.some(e => e.type === 'clicked')) clicks++;
-    if (events.some(e => e.type === 'replied')) replies++;
+
+    if (events.some(e => e.type === "opened")) opens++;
+    if (events.some(e => e.type === "clicked")) clicks++;
+    if (events.some(e => e.type === "replied")) replies++;
   }
 
   const sends = emailSends.length;
@@ -148,7 +166,7 @@ async function calculateVariantPerformance(
   const replyRate = sends > 0 ? (replies / sends) * 100 : 0;
 
   // Intent Score basierend auf Gewichtung
-  const intentScore = (openRate * 0.3) + (clickRate * 0.3) + (replyRate * 0.4);
+  const intentScore = openRate * 0.3 + clickRate * 0.3 + replyRate * 0.4;
 
   return {
     variantId,
@@ -159,7 +177,7 @@ async function calculateVariantPerformance(
     openRate,
     clickRate,
     replyRate,
-    intentScore
+    intentScore,
   };
 }
 
@@ -176,8 +194,8 @@ export function hasEnoughDataForConclusion(results: ABTestResult[]): boolean {
  */
 export function selectWinner(results: ABTestResult[]): string | null {
   if (results.length === 0) return null;
-  
-  const winner = results.reduce((best, current) => 
+
+  const winner = results.reduce((best, current) =>
     current.intentScore > best.intentScore ? current : best
   );
 
@@ -186,7 +204,7 @@ export function selectWinner(results: ABTestResult[]): string | null {
     .filter(r => r.variantId !== winner.variantId)
     .sort((a, b) => b.intentScore - a.intentScore)[0];
 
-  if (secondBest && (winner.intentScore - secondBest.intentScore) < 5) {
+  if (secondBest && winner.intentScore - secondBest.intentScore < 5) {
     return null; // Kein klarer Gewinner
   }
 
@@ -196,43 +214,59 @@ export function selectWinner(results: ABTestResult[]): string | null {
 /**
  * Promotet eine Variante zu 100% Gewichtung
  */
-export async function promoteWinner(abTestId: string, winnerVariantId: string): Promise<void> {
+export async function promoteWinner(
+  abTestId: string,
+  winnerVariantId: string
+): Promise<void> {
   if (!admin) return;
+  const requestId = makeRequestId();
 
   try {
     // Hole den A/B Test
     const { data: abTest, error } = await admin
-      .from('ab_tests')
-      .select('*')
-      .eq('id', abTestId)
+      .from("ab_tests")
+      .select("*")
+      .eq("id", abTestId)
       .single();
 
     if (error || !abTest) {
-      console.error('Failed to fetch A/B test for promotion:', error);
+      logEvent("error", "ab_test_fetch_for_promotion_failed", {
+        requestId,
+        abTestId,
+        error: String(error),
+      });
       return;
     }
 
     const variants = abTest.variants as EmailVariant[];
     const updatedVariants = variants.map(v => ({
       ...v,
-      weight: v.id === winnerVariantId ? 100 : 0
+      weight: v.id === winnerVariantId ? 100 : 0,
     }));
 
     // Update A/B Test
     await admin
-      .from('ab_tests')
+      .from("ab_tests")
       .update({
         variants: updatedVariants,
         winner_variant_id: winnerVariantId,
-        status: 'completed',
-        updated_at: new Date().toISOString()
+        status: "completed",
+        updated_at: new Date().toISOString(),
       })
-      .eq('id', abTestId);
+      .eq("id", abTestId);
 
-    console.log(`A/B Test ${abTestId} completed. Winner: ${winnerVariantId}`);
-
+    logEvent("info", "ab_test_completed", {
+      requestId,
+      abTestId,
+      winnerVariantId,
+    });
   } catch (err) {
-    console.error('Failed to promote A/B test winner:', err);
+    logEvent("error", "ab_test_promote_failed", {
+      requestId,
+      abTestId,
+      winnerVariantId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -246,31 +280,37 @@ export async function createABTest(
   variants: EmailVariant[]
 ): Promise<string | null> {
   if (!admin) return null;
+  const requestId = makeRequestId();
 
   try {
     // Validiere Gewichtung
     const totalWeight = variants.reduce((sum, v) => sum + v.weight, 0);
     if (totalWeight !== 100) {
-      throw new Error('Variant weights must sum to 100');
+      throw new Error("Variant weights must sum to 100");
     }
 
     const { data, error } = await admin
-      .from('ab_tests')
+      .from("ab_tests")
       .insert({
         workspace_id: workspaceId,
         sequence_id: sequenceId,
         step_number: stepNumber,
         variants,
-        status: 'active'
+        status: "active",
       })
-      .select('id')
+      .select("id")
       .single();
 
     if (error) throw error;
     return data.id;
-
   } catch (err) {
-    console.error('Failed to create A/B test:', err);
+    logEvent("error", "ab_test_create_failed", {
+      requestId,
+      workspaceId,
+      sequenceId,
+      stepNumber,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }

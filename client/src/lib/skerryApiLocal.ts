@@ -71,7 +71,10 @@ export async function authLoginLocal(
   await new Promise(resolve => setTimeout(resolve, 300));
 
   // Check for exclusive developer account
-  if (email === DEVELOPER_ACCOUNT.email && password === DEVELOPER_ACCOUNT.password) {
+  if (
+    email === DEVELOPER_ACCOUNT.email &&
+    password === DEVELOPER_ACCOUNT.password
+  ) {
     return {
       ok: true,
       user: DEVELOPER_ACCOUNT.user,

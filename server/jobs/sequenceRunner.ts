@@ -5,13 +5,13 @@
  * Env: SUPABASE_URL, OPENAI_API_KEY, RESEND_API_KEY
  */
 
-import { admin } from '../supabaseAdmin.js';
-import { generateEmailFromTemplate, shouldExecuteStep, calculateNextSendAt } from '../pipeline/sequenceEngine.js';
-
-// Simple logging function to avoid circular dependency
-function logEvent(level: string, event: string, data?: any) {
-  console.log(`[${level.toUpperCase()}] ${event}:`, data);
-}
+import { admin } from "../supabaseAdmin.js";
+import {
+  generateEmailFromTemplate,
+  shouldExecuteStep,
+  calculateNextSendAt,
+} from "../pipeline/sequenceEngine.js";
+import { logEvent, makeRequestId } from "../lib/logger.js";
 
 interface SequenceJobStats {
   processed: number;
@@ -24,18 +24,28 @@ interface SequenceJobStats {
  * Haupt-Runner-Funktion - wird alle 5 Minuten aufgerufen
  */
 export async function runSequenceProcessor(): Promise<SequenceJobStats> {
-  const stats: SequenceJobStats = { processed: 0, sent: 0, failed: 0, skipped: 0 };
+  const runId = makeRequestId();
+  const stats: SequenceJobStats = {
+    processed: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+  };
 
   try {
     if (!admin) {
-      logEvent('error', 'sequence_runner_no_supabase', { error: 'Supabase admin client not configured' });
+      logEvent("error", "sequence_runner_no_supabase", {
+        runId,
+        error: "Supabase admin client not configured",
+      });
       return stats;
     }
 
     // Hole alle aktiven Enrollments die jetzt ausgeführt werden sollen
     const { data: enrollments, error: enrollmentError } = await admin!
-      .from('sequence_enrollments')
-      .select(`
+      .from("sequence_enrollments")
+      .select(
+        `
         id,
         lead_id,
         sequence_id,
@@ -56,13 +66,17 @@ export async function runSequenceProcessor(): Promise<SequenceJobStats> {
           extraction,
           newsletter
         )
-      `)
-      .eq('status', 'active')
-      .lte('next_send_at', new Date().toISOString())
-      .eq('sequences.is_active', true);
+      `
+      )
+      .eq("status", "active")
+      .lte("next_send_at", new Date().toISOString())
+      .eq("sequences.is_active", true);
 
     if (enrollmentError) {
-      logEvent('error', 'sequence_runner_fetch_enrollments', { error: String(enrollmentError) });
+      logEvent("error", "sequence_runner_fetch_enrollments", {
+        runId,
+        error: String(enrollmentError),
+      });
       return stats;
     }
 
@@ -70,30 +84,34 @@ export async function runSequenceProcessor(): Promise<SequenceJobStats> {
       return stats; // Keine ausstehenden Enrollments
     }
 
-    logEvent('info', 'sequence_runner_processing', { 
-      enrollmentCount: enrollments.length 
+    logEvent("info", "sequence_runner_processing", {
+      runId,
+      enrollmentCount: enrollments.length,
     });
 
     // Verarbeite jede Enrollment
     for (const enrollment of enrollments) {
       stats.processed++;
-      
+
       try {
         await processEnrollment(enrollment, stats);
       } catch (err) {
         stats.failed++;
-        logEvent('error', 'sequence_runner_enrollment_failed', {
+        logEvent("error", "sequence_runner_enrollment_failed", {
+          runId,
           enrollmentId: enrollment.id,
-          error: String(err)
+          error: String(err),
         });
       }
     }
 
-    logEvent('info', 'sequence_runner_completed', stats);
+    logEvent("info", "sequence_runner_completed", { runId, ...stats });
     return stats;
-
   } catch (err) {
-    logEvent('error', 'sequence_runner_unexpected_error', { error: String(err) });
+    logEvent("error", "sequence_runner_unexpected_error", {
+      runId,
+      error: String(err),
+    });
     return stats;
   }
 }
@@ -108,9 +126,11 @@ async function processEnrollment(
   const sequence = enrollment.sequences;
   const lead = enrollment.leads;
   const steps = sequence.steps as any[];
-  
+
   // Finde den aktuellen Step
-  const currentStep = steps.find(step => step.stepNumber === enrollment.current_step);
+  const currentStep = steps.find(
+    step => step.stepNumber === enrollment.current_step
+  );
   if (!currentStep) {
     // Kein Step gefunden -> Enrollment abschließen
     await completeEnrollment(enrollment.id);
@@ -127,13 +147,13 @@ async function processEnrollment(
 
   // Hole Workspace-Daten für Business Description
   const { data: workspace } = await admin!
-    .from('workspaces')
-    .select('name')
-    .eq('id', sequence.workspace_id)
+    .from("workspaces")
+    .select("name")
+    .eq("id", sequence.workspace_id)
     .single();
 
-  const businessDescription = workspace?.name || 'B2B Business';
-  const senderName = 'Skerry';
+  const businessDescription = workspace?.name || "B2B Business";
+  const senderName = "Skerry";
 
   // Generiere Email aus Template
   const emailTemplate = await generateEmailFromTemplate(
@@ -154,20 +174,22 @@ async function processEnrollment(
 
   if (sendResult.success) {
     stats.sent++;
-    
+
     // Berechne nächsten Step
-    const nextStep = steps.find(step => step.stepNumber === enrollment.current_step + 1);
+    const nextStep = steps.find(
+      step => step.stepNumber === enrollment.current_step + 1
+    );
     if (nextStep) {
       // Nächsten Step planen
       const nextSendAt = calculateNextSendAt(nextStep, new Date());
       await admin!
-        .from('sequence_enrollments')
+        .from("sequence_enrollments")
         .update({
           current_step: nextStep.stepNumber,
           next_send_at: nextSendAt.toISOString(),
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
-        .eq('id', enrollment.id);
+        .eq("id", enrollment.id);
     } else {
       // Sequence abgeschlossen
       await completeEnrollment(enrollment.id);
@@ -180,12 +202,14 @@ async function processEnrollment(
 /**
  * Holt das letzte Email-Event für einen Lead
  */
-async function getLastEmailEvent(leadId: string): Promise<{ type: string; createdAt: Date } | undefined> {
+async function getLastEmailEvent(
+  leadId: string
+): Promise<{ type: string; createdAt: Date } | undefined> {
   const { data: emailSend } = await admin!
-    .from('email_sends')
-    .select('events, created_at')
-    .eq('lead_id', leadId)
-    .order('created_at', { ascending: false })
+    .from("email_sends")
+    .select("events, created_at")
+    .eq("lead_id", leadId)
+    .order("created_at", { ascending: false })
     .limit(1)
     .single();
 
@@ -195,10 +219,10 @@ async function getLastEmailEvent(leadId: string): Promise<{ type: string; create
 
   const events = emailSend.events as any[];
   const latestEvent = events[events.length - 1];
-  
+
   return {
     type: latestEvent.type,
-    createdAt: new Date(latestEvent.createdAt)
+    createdAt: new Date(latestEvent.createdAt),
   };
 }
 
@@ -214,30 +238,31 @@ async function sendSequenceEmail(
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
   try {
     const resendKey = process.env.RESEND_API_KEY;
-    const fromEmail = process.env.SKERRY_FROM_EMAIL || 'Skerry <onboarding@resend.dev>';
-    
+    const fromEmail =
+      process.env.SKERRY_FROM_EMAIL || "Skerry <onboarding@resend.dev>";
+
     if (!resendKey) {
-      return { success: false, error: 'RESEND_API_KEY not configured' };
+      return { success: false, error: "RESEND_API_KEY not configured" };
     }
 
     // Hole Lead-Email
     const { data: lead } = await admin!
-      .from('leads')
-      .select('personal')
-      .eq('id', leadId)
+      .from("leads")
+      .select("personal")
+      .eq("id", leadId)
       .single();
 
     const recipientEmail = lead?.personal?.email;
     if (!recipientEmail) {
-      return { success: false, error: 'Lead has no email address' };
+      return { success: false, error: "Lead has no email address" };
     }
 
     // Sende Email via Resend
-    const resp = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
       headers: {
         Authorization: `Bearer ${resendKey}`,
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         from: fromEmail,
@@ -249,35 +274,34 @@ async function sendSequenceEmail(
     });
 
     if (!resp.ok) {
-      const errorData = await resp.json() as { message?: string };
-      return { success: false, error: errorData.message || 'Send failed' };
+      const errorData = (await resp.json()) as { message?: string };
+      return { success: false, error: errorData.message || "Send failed" };
     }
 
-    const sendData = await resp.json() as { id: string };
+    const sendData = (await resp.json()) as { id: string };
 
     // Speichere Email-Send Record
-    await admin!
-      .from('email_sends')
-      .insert({
-        lead_id: leadId,
-        sequence_enrollment_id: enrollmentId,
-        workspace_id: workspaceId,
-        recipient_email: recipientEmail,
-        subject: emailTemplate.subject,
-        body: emailTemplate.body,
-        provider: 'resend',
-        provider_message_id: sendData.id,
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-        events: [{
-          type: 'sent',
+    await admin!.from("email_sends").insert({
+      lead_id: leadId,
+      sequence_enrollment_id: enrollmentId,
+      workspace_id: workspaceId,
+      recipient_email: recipientEmail,
+      subject: emailTemplate.subject,
+      body: emailTemplate.body,
+      provider: "resend",
+      provider_message_id: sendData.id,
+      status: "sent",
+      sent_at: new Date().toISOString(),
+      events: [
+        {
+          type: "sent",
           createdAt: new Date().toISOString(),
-          data: { messageId: sendData.id }
-        }]
-      });
+          data: { messageId: sendData.id },
+        },
+      ],
+    });
 
     return { success: true, messageId: sendData.id };
-
   } catch (err) {
     return { success: false, error: String(err) };
   }
@@ -288,12 +312,12 @@ async function sendSequenceEmail(
  */
 async function completeEnrollment(enrollmentId: string): Promise<void> {
   await admin!
-    .from('sequence_enrollments')
+    .from("sequence_enrollments")
     .update({
-      status: 'completed',
-      updated_at: new Date().toISOString()
+      status: "completed",
+      updated_at: new Date().toISOString(),
     })
-    .eq('id', enrollmentId);
+    .eq("id", enrollmentId);
 }
 
 /**
@@ -322,7 +346,7 @@ function markdownToHtml(md: string): string {
       /^---$/gm,
       '<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;" />'
     );
-  
+
   html = html
     .split(/\n{2,}/)
     .map(para =>
@@ -331,7 +355,7 @@ function markdownToHtml(md: string): string {
         : `<p style="margin:0 0 12px;line-height:1.5;color:#1e293b;">${para.replace(/\n/g, "<br/>")}</p>`
     )
     .join("\n");
-    
+
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;">${html}</div>`;
 }
 
@@ -353,19 +377,28 @@ function markdownToText(md: string): string {
 export function startSequenceRunner(): void {
   // Alle 5 Minuten ausführen (300000 ms)
   const interval = 5 * 60 * 1000;
-  
-  logEvent('info', 'sequence_runner_started', { interval });
-  
+
+  logEvent("info", "sequence_runner_started", {
+    requestId: makeRequestId(),
+    interval,
+  });
+
   setInterval(async () => {
     try {
       const stats = await runSequenceProcessor();
-      
+
       // Log nur wenn etwas passiert ist
       if (stats.processed > 0) {
-        logEvent('info', 'sequence_runner_cycle_completed', stats);
+        logEvent("info", "sequence_runner_cycle_completed", {
+          requestId: makeRequestId(),
+          ...stats,
+        });
       }
     } catch (err) {
-      logEvent('error', 'sequence_runner_cycle_failed', { error: String(err) });
+      logEvent("error", "sequence_runner_cycle_failed", {
+        requestId: makeRequestId(),
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }, interval);
 }

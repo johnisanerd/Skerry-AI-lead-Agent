@@ -41,12 +41,29 @@ import { assertEnterpriseProductionConfig } from "./productionConfig";
 import { admin } from "./supabaseAdmin";
 import { discoverLeads } from "./pipeline/discoveryRouter";
 import { startSequenceRunner } from "./jobs/sequenceRunner";
-import { handleResendWebhook, validateResendWebhook } from "./routes/webhooks/resendWebhook.js";
-import { createABTest, calculateABTestPerformance, promoteWinner } from "./pipeline/abSelector.js";
-import { generateCSVExport, generateHubSpotExport, generateSalesforceExport } from "./pipeline/exportService.js";
+import {
+  handleResendWebhook,
+  validateResendWebhook,
+} from "./routes/webhooks/resendWebhook.js";
+import {
+  createABTest,
+  calculateABTestPerformance,
+  promoteWinner,
+} from "./pipeline/abSelector.js";
+import {
+  generateCSVExport,
+  generateHubSpotExport,
+  generateSalesforceExport,
+} from "./pipeline/exportService.js";
 import { logAudit, getAuditLogs } from "./lib/auditLogger.js";
-import { createDeletionRequest, exportWorkspaceData, deleteWorkspace, hasDeletionRequest } from "./pipeline/gdprService.js";
+import {
+  createDeletionRequest,
+  exportWorkspaceData,
+  deleteWorkspace,
+  hasDeletionRequest,
+} from "./pipeline/gdprService.js";
 import { startGdprProcessor } from "./jobs/gdprProcessor.js";
+import { logEvent, makeRequestId } from "./lib/logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -95,6 +112,7 @@ type AccountTier = "solo" | "team" | "agency";
 type UserRole = "user" | "developer";
 
 interface AuthSessionUser {
+  id: string;
   name: string;
   email: string;
   role: UserRole;
@@ -108,6 +126,7 @@ interface SessionPayload {
 
 interface RequestContext {
   requestId: string;
+  workspaceId?: string;
 }
 
 interface RequestWithContext extends express.Request {
@@ -155,6 +174,7 @@ const DEMO_USERS: Record<string, { password: string; user: AuthSessionUser }> =
     "solo@skerry.io": {
       password: "solo123",
       user: {
+        id: "demo:solo@skerry.io",
         name: "Solo User",
         email: "solo@skerry.io",
         role: "user",
@@ -164,6 +184,7 @@ const DEMO_USERS: Record<string, { password: string; user: AuthSessionUser }> =
     "team@skerry.io": {
       password: "team123",
       user: {
+        id: "demo:team@skerry.io",
         name: "Team User",
         email: "team@skerry.io",
         role: "user",
@@ -173,6 +194,7 @@ const DEMO_USERS: Record<string, { password: string; user: AuthSessionUser }> =
     "agency@skerry.io": {
       password: "agency123",
       user: {
+        id: "demo:agency@skerry.io",
         name: "Agency User",
         email: "agency@skerry.io",
         role: "user",
@@ -182,6 +204,7 @@ const DEMO_USERS: Record<string, { password: string; user: AuthSessionUser }> =
     "dev@skerry.io": {
       password: "skerry-dev-2024",
       user: {
+        id: "demo:dev@skerry.io",
         name: "Developer",
         email: "dev@skerry.io",
         role: "developer",
@@ -207,28 +230,121 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function makeRequestId(): string {
-  return crypto.randomBytes(8).toString("hex");
+function httpError(
+  statusCode: number,
+  message: string
+): Error & { statusCode: number } {
+  const err = new Error(message) as Error & { statusCode: number };
+  err.statusCode = statusCode;
+  return err;
 }
 
-function logEvent(
-  level: "info" | "warn" | "error",
-  event: string,
-  payload: Record<string, unknown>
-): void {
-  const entry = {
-    ts: new Date().toISOString(),
-    level,
-    event,
-    ...payload,
-  };
-  const line = JSON.stringify(entry);
-  if (level === "error") {
-    console.error(line);
-  } else if (level === "warn") {
-    console.warn(line);
-  } else {
-    console.log(line);
+function getRequestId(req: express.Request): string {
+  return (
+    (req as RequestWithContext).ctx?.requestId ??
+    req.get("x-request-id") ??
+    makeRequestId()
+  );
+}
+
+function readWorkspaceIdFromRequest(req: express.Request): string | null {
+  const headerValue = req.get("x-workspace-id");
+  if (headerValue && headerValue.trim().length > 0) return headerValue.trim();
+  const bodyAny = req.body as Record<string, unknown> | undefined;
+  const bodyValue =
+    typeof bodyAny?.workspaceId === "string" ? bodyAny.workspaceId : undefined;
+  if (bodyValue && bodyValue.trim().length > 0) return bodyValue.trim();
+  const queryAny = req.query as Record<string, unknown> | undefined;
+  const queryValue =
+    typeof queryAny?.workspaceId === "string"
+      ? queryAny.workspaceId
+      : undefined;
+  if (queryValue && queryValue.trim().length > 0) return queryValue.trim();
+  return null;
+}
+
+async function getUserWorkspaceMembership(
+  userEmail: string,
+  workspaceId: string
+): Promise<{ role?: string } | null> {
+  if (!admin) return null;
+  const { data, error } = await admin
+    .from("workspace_members")
+    .select("role")
+    .eq("workspace_id", workspaceId)
+    .eq("user_email", userEmail)
+    .limit(1);
+  if (error) throw error;
+  if (!data || data.length === 0) return null;
+  return { role: (data[0] as { role?: string }).role };
+}
+
+async function assertWorkspaceAccess(
+  req: express.Request,
+  user: AuthSessionUser,
+  workspaceId: string
+): Promise<{ role?: string }> {
+  if (!admin) {
+    if (workspaceId !== "demo-workspace") {
+      throw httpError(403, "Workspace access denied.");
+    }
+    return { role: "owner" };
+  }
+  const uuidSchema = z.string().uuid();
+  const parsed = uuidSchema.safeParse(workspaceId);
+  if (!parsed.success) {
+    throw httpError(400, "Invalid workspace id.");
+  }
+  const membership = await getUserWorkspaceMembership(user.email, workspaceId);
+  if (!membership) {
+    throw httpError(403, "Workspace access denied.");
+  }
+  return membership;
+}
+
+async function resolveWorkspaceId(
+  req: express.Request,
+  user: AuthSessionUser
+): Promise<string> {
+  const requestId = getRequestId(req);
+  const candidate = readWorkspaceIdFromRequest(req);
+  if (candidate) {
+    await assertWorkspaceAccess(req, user, candidate);
+    (req as RequestWithContext).ctx = {
+      requestId,
+      workspaceId: candidate,
+    };
+    return candidate;
+  }
+  if (!admin) {
+    const fallback = "demo-workspace";
+    (req as RequestWithContext).ctx = { requestId, workspaceId: fallback };
+    return fallback;
+  }
+  const { data, error } = await admin
+    .from("workspace_members")
+    .select("workspace_id")
+    .eq("user_email", user.email)
+    .limit(1);
+  if (error) throw error;
+  const id = (data?.[0] as { workspace_id?: string } | undefined)?.workspace_id;
+  if (!id) {
+    throw httpError(403, "Workspace access denied.");
+  }
+  await assertWorkspaceAccess(req, user, id);
+  (req as RequestWithContext).ctx = { requestId, workspaceId: id };
+  return id;
+}
+
+async function assertWorkspaceOwner(
+  req: express.Request,
+  user: AuthSessionUser,
+  workspaceId: string
+): Promise<void> {
+  if (user.role === "developer") return;
+  const membership = await assertWorkspaceAccess(req, user, workspaceId);
+  if (membership.role !== "owner") {
+    throw httpError(403, "Workspace owner role required.");
   }
 }
 
@@ -708,15 +824,35 @@ export async function buildApp(): Promise<express.Express> {
   });
   await entitlementDb.init();
 
+  const isProd = process.env.NODE_ENV === "production";
+  const scriptSrc = ["'self'"];
+  if (!isProd) {
+    scriptSrc.push("'unsafe-inline'", "'unsafe-eval'");
+  }
+
   app.set("trust proxy", 1);
   app.use(
     helmet({
-      contentSecurityPolicy: false,
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          baseUri: ["'self'"],
+          frameAncestors: ["'none'"],
+          objectSrc: ["'none'"],
+          imgSrc: ["'self'", "data:", "https:"],
+          scriptSrc,
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          fontSrc: ["'self'", "data:", "https:"],
+          connectSrc: ["'self'", "https:", "wss:", "ws:"],
+          frameSrc: ["'self'", "https:"],
+          workerSrc: ["'self'", "blob:"],
+          upgradeInsecureRequests: isProd ? [] : null,
+        },
+      },
       crossOriginResourcePolicy: false,
-      hsts:
-        process.env.NODE_ENV === "production"
-          ? { maxAge: 31536000, includeSubDomains: true, preload: false }
-          : false,
+      hsts: isProd
+        ? { maxAge: 31536000, includeSubDomains: true, preload: false }
+        : false,
     })
   );
   app.use(express.json({ limit: "1mb" }));
@@ -970,8 +1106,9 @@ export async function buildApp(): Promise<express.Express> {
         try {
           // Query workspace_members for the current user
           const { data: memberships, error: memberError } = await admin
-            .from('workspace_members')
-            .select(`
+            .from("workspace_members")
+            .select(
+              `
               workspace_id,
               role,
               workspaces (
@@ -980,31 +1117,38 @@ export async function buildApp(): Promise<express.Express> {
                 plan_tier,
                 slug
               )
-            `)
-            .eq('user_email', user.email);
-          
+            `
+            )
+            .eq("user_email", user.email);
+
           if (memberError) throw memberError;
-          
+
           // Extract workspace data from memberships
-          const workspaces = memberships?.map(m => m.workspaces).filter(Boolean) || [];
+          const workspaces =
+            memberships?.map(m => m.workspaces).filter(Boolean) || [];
           return res.json({ ok: true, workspaces });
         } catch (err) {
           logEvent("error", "workspaces_fetch_failed", {
             requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
             error: String(err),
           });
+          return res
+            .status(502)
+            .json({ ok: false, error: "Failed to fetch workspaces" });
         }
       }
 
       // Fallback: return demo workspace
       return res.json({
         ok: true,
-        workspaces: [{
-          id: "demo-workspace",
-          name: "Demo Workspace",
-          plan_tier: user.tier,
-          slug: "demo",
-        }]
+        workspaces: [
+          {
+            id: "demo-workspace",
+            name: "Demo Workspace",
+            plan_tier: user.tier,
+            slug: "demo",
+          },
+        ],
       });
     })
   );
@@ -1022,17 +1166,18 @@ export async function buildApp(): Promise<express.Express> {
       }
 
       const { id } = req.params as { id: string };
-      const targetWorkspaceId = id || "demo-workspace";
+      const targetWorkspaceId = id;
+      await assertWorkspaceAccess(req, user, targetWorkspaceId);
 
       // If Supabase is configured, fetch real ICP profile
       if (admin) {
         try {
           const { data, error } = await admin
-            .from('icp_profiles')
-            .select('business_description, ideal_customer, problem_solved')
-            .eq('workspace_id', targetWorkspaceId)
+            .from("icp_profiles")
+            .select("business_description, ideal_customer, problem_solved")
+            .eq("workspace_id", targetWorkspaceId)
             .single();
-          
+
           if (data && !error) {
             return res.json({ ok: true, icp: data });
           }
@@ -1061,46 +1206,49 @@ export async function buildApp(): Promise<express.Express> {
       }
 
       const { id } = req.params as { id: string };
-      const { business_description, ideal_customer, problem_solved } = req.body as {
-        business_description?: string;
-        ideal_customer?: string;
-        problem_solved?: string;
-      };
+      const { business_description, ideal_customer, problem_solved } =
+        req.body as {
+          business_description?: string;
+          ideal_customer?: string;
+          problem_solved?: string;
+        };
 
-      const targetWorkspaceId = id || "demo-workspace";
+      const targetWorkspaceId = id;
+      await assertWorkspaceAccess(req, user, targetWorkspaceId);
 
       // If Supabase is configured, save ICP profile
       if (admin) {
         try {
-          const { error } = await admin
-            .from('icp_profiles')
-            .upsert({
+          const { error } = await admin.from("icp_profiles").upsert(
+            {
               workspace_id: targetWorkspaceId,
               business_description,
               ideal_customer,
               problem_solved,
               updated_at: new Date().toISOString(),
-            }, {
-              onConflict: 'workspace_id'
-            });
+            },
+            {
+              onConflict: "workspace_id",
+            }
+          );
 
           if (error) throw error;
-          
+
           return res.json({ ok: true });
         } catch (err) {
           logEvent("error", "icp_save_failed", {
             requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
             error: String(err),
           });
-          return res.status(502).json({ 
-            ok: false, 
-            error: "Failed to save ICP profile" 
+          return res.status(502).json({
+            ok: false,
+            error: "Failed to save ICP profile",
           });
         }
       }
 
       // Fallback: success (client will keep using localStorage)
-      return res.json({ ok: true, fallback: 'localStorage' });
+      return res.json({ ok: true, fallback: "localStorage" });
     })
   );
 
@@ -1271,56 +1419,59 @@ export async function buildApp(): Promise<express.Express> {
 
       let leads: GeneratedLead[] = [];
       let source: "apollo" | "openai" | "none" = "none";
-      
+
       // Parse ICP from request (for now, use businessDescription and targetAudience)
       const parsedICP = {
         roles: [targetAudience], // Simple parsing - will be enhanced in Phase 3
         locations: undefined,
         companySizeRange: undefined,
       };
-      
+
       // Priority 1: Apollo Discovery (legal, kostenlos, DSGVO-konform)
       if (process.env.APOLLO_API_KEY) {
         try {
-          const result = await discoverLeads({ 
-            icp: parsedICP, 
-            limit: count, 
-            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown" 
+          const result = await discoverLeads({
+            icp: parsedICP,
+            limit: count,
+            requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           });
-          
+
           // Map Apollo leads to existing GeneratedLead format
           leads = result.leads.map(lead => ({
             firstName: lead.firstName,
             lastName: lead.lastName,
             title: lead.title,
-            email: lead.email || `${lead.firstName.toLowerCase()}.${lead.lastName.toLowerCase()}@${lead.organization.website ? new URL(lead.organization.website).hostname : 'example.com'}`,
-            linkedin: lead.linkedin || '',
-            organization: { 
-              name: lead.organization.name, 
-              website: lead.organization.website || '' 
+            email:
+              lead.email ||
+              `${lead.firstName.toLowerCase()}.${lead.lastName.toLowerCase()}@${lead.organization.website ? new URL(lead.organization.website).hostname : "example.com"}`,
+            linkedin: lead.linkedin || "",
+            organization: {
+              name: lead.organization.name,
+              website: lead.organization.website || "",
             },
             websiteContext: `${lead.organization.name} is active in ${targetAudience}. Professional profile from Apollo.io.`,
             personContext: `${lead.firstName} is a ${lead.title} at ${lead.organization.name}. Relevant for ${businessDescription}.`,
             uniqueAngles: [
               "Strategic Partnership",
-              "Technology Integration", 
-              "Market Expansion"
+              "Technology Integration",
+              "Market Expansion",
             ],
           }));
           source = "apollo";
         } catch (err) {
-          if (err instanceof Error && err.message === 'OPENAI_FALLBACK') {
+          if (err instanceof Error && err.message === "OPENAI_FALLBACK") {
             // Continue to OpenAI fallback below
             leads = [];
           } else {
             logEvent("warn", "apollo_discovery_failed", {
-              requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+              requestId:
+                (req as RequestWithContext).ctx?.requestId ?? "unknown",
               error: String(err),
             });
           }
         }
       }
-      
+
       // Priority 2: OpenAI Lead Generation (Fallback wenn kein Apollo oder Apollo fehlgeschlagen)
       if (leads.length === 0 && process.env.OPENAI_API_KEY) {
         try {
@@ -1340,17 +1491,17 @@ export async function buildApp(): Promise<express.Express> {
           });
         }
       }
-      
+
       // No provider available
       if (leads.length === 0) {
         return res.status(503).json({
           ok: false,
-          code: 'NO_DISCOVERY_PROVIDER',
-          message: 'Kein Discovery-Provider konfiguriert.',
+          code: "NO_DISCOVERY_PROVIDER",
+          message: "Kein Discovery-Provider konfiguriert.",
           setup: {
-            apollo: 'APOLLO_API_KEY in .env setzen — kostenlos auf apollo.io',
-            openai: 'OPENAI_API_KEY in .env setzen — Fallback-Option',
-          }
+            apollo: "APOLLO_API_KEY in .env setzen — kostenlos auf apollo.io",
+            openai: "OPENAI_API_KEY in .env setzen — Fallback-Option",
+          },
         });
       }
 
@@ -1380,21 +1531,18 @@ export async function buildApp(): Promise<express.Express> {
           .json({ ok: false, error: "Authentication required" });
       }
 
-      const { leads, workspaceId } = req.body as { 
-        leads: any[], 
-        workspaceId?: string 
-      };
+      const { leads } = req.body as { leads: any[] };
 
       if (!admin) {
-        return res.json({ 
-          ok: true, 
-          persisted: false, 
-          reason: 'no_db' 
+        return res.json({
+          ok: true,
+          persisted: false,
+          reason: "no_db",
         });
       }
 
       try {
-        const targetWorkspaceId = workspaceId || "demo-workspace";
+        const targetWorkspaceId = await resolveWorkspaceId(req, user);
         const leadsToInsert = leads.map(lead => ({
           workspace_id: targetWorkspaceId,
           first_name: lead.firstName || lead.personal?.firstName,
@@ -1403,34 +1551,34 @@ export async function buildApp(): Promise<express.Express> {
           title: lead.title || lead.personal?.title,
           linkedin_url: lead.linkedin || lead.personal?.linkedin,
           company_name: lead.organization?.name || lead.organization?.name,
-          company_website: lead.organization?.website || lead.organization?.website,
-          website_context: lead.websiteContext || lead.extraction?.websiteContext,
+          company_website:
+            lead.organization?.website || lead.organization?.website,
+          website_context:
+            lead.websiteContext || lead.extraction?.websiteContext,
           person_context: lead.personContext || lead.extraction?.personContext,
           unique_angles: lead.uniqueAngles || lead.extraction?.uniqueAngles,
           newsletter_body: lead.newsletter?.body,
-          stage: lead.stage || 'source',
+          stage: lead.stage || "source",
           created_at: new Date().toISOString(),
         }));
 
-        const { error } = await admin
-          .from('leads')
-          .insert(leadsToInsert);
+        const { error } = await admin.from("leads").insert(leadsToInsert);
 
         if (error) throw error;
-        
-        return res.json({ 
-          ok: true, 
-          persisted: true, 
-          count: leadsToInsert.length 
+
+        return res.json({
+          ok: true,
+          persisted: true,
+          count: leadsToInsert.length,
         });
       } catch (err) {
         logEvent("error", "leads_persist_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({ 
-          ok: false, 
-          error: "Failed to persist leads" 
+        return res.status(502).json({
+          ok: false,
+          error: "Failed to persist leads",
         });
       }
     })
@@ -1449,7 +1597,11 @@ export async function buildApp(): Promise<express.Express> {
             .json({ ok: false, error: "Authentication required" });
         }
 
-        const { count = 5, businessDescription = "B2B SaaS", targetAudience = "Growth-stage startups" } = req.body as {
+        const {
+          count = 5,
+          businessDescription = "B2B SaaS",
+          targetAudience = "Growth-stage startups",
+        } = req.body as {
           count?: number;
           businessDescription?: string;
           targetAudience?: string;
@@ -1590,7 +1742,7 @@ export async function buildApp(): Promise<express.Express> {
     const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
     res.json({
       ok: true,
-      version: '1.0.0',
+      version: "1.0.0",
       services: {
         apollo: hasApollo,
         openai: hasOpenAI,
@@ -1599,128 +1751,139 @@ export async function buildApp(): Promise<express.Express> {
         supabase: Boolean(process.env.SUPABASE_URL),
         stripe: Boolean(process.env.STRIPE_SECRET_KEY),
       },
-      discovery_provider: hasApollo ? 'apollo' : hasOpenAI ? 'openai' : 'none',
-      demo_mode: process.env.ALLOW_DEMO_AUTH === 'true',
+      discovery_provider: hasApollo ? "apollo" : hasOpenAI ? "openai" : "none",
+      demo_mode: process.env.ALLOW_DEMO_AUTH === "true",
       ready_for_production: hasApollo && Boolean(process.env.SUPABASE_URL),
     });
   });
 
   // ──────────── /api/billing/checkout
-  app.post('/api/billing/checkout', requireAuth, asyncHandler(async (req, res) => {
-    const stripeKey = process.env.STRIPE_SECRET_KEY;
-    if (!stripeKey) {
-      return res.status(503).json({
-        ok: false,
-        code: 'STRIPE_NOT_CONFIGURED',
-        message: 'Stripe ist noch nicht konfiguriert. Kommt bald.',
+  app.post(
+    "/api/billing/checkout",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const stripeKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeKey) {
+        return res.status(503).json({
+          ok: false,
+          code: "STRIPE_NOT_CONFIGURED",
+          message: "Stripe ist noch nicht konfiguriert. Kommt bald.",
+        });
+      }
+      const { priceId } = req.body as { priceId: string };
+      const { default: Stripe } = await import("stripe");
+      const stripe = new Stripe(stripeKey);
+      const session = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: `${process.env.PUBLIC_APP_URL ?? "http://localhost:3000"}/billing?success=1`,
+        cancel_url: `${process.env.PUBLIC_APP_URL ?? "http://localhost:3000"}/billing`,
       });
-    }
-    const { priceId } = req.body as { priceId: string };
-    const { default: Stripe } = await import('stripe');
-    const stripe = new Stripe(stripeKey);
-    const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${process.env.PUBLIC_APP_URL ?? 'http://localhost:3000'}/billing?success=1`,
-      cancel_url: `${process.env.PUBLIC_APP_URL ?? 'http://localhost:3000'}/billing`,
-    });
-    return res.json({ ok: true, url: session.url });
-  }));
+      return res.json({ ok: true, url: session.url });
+    })
+  );
 
   // ──────────── /api/billing/webhook
-  app.post('/api/billing/webhook', asyncHandler(async (req, res) => {
-    const stripeKey = process.env.STRIPE_SECRET_KEY;
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    
-    if (!stripeKey || !webhookSecret) {
-      return res.status(503).json({ ok: false, error: 'Stripe not configured' });
-    }
+  app.post(
+    "/api/billing/webhook",
+    asyncHandler(async (req, res) => {
+      const stripeKey = process.env.STRIPE_SECRET_KEY;
+      const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-    const sig = req.headers['stripe-signature'] as string;
-    if (!sig) {
-      return res.status(400).json({ ok: false, error: 'Missing signature' });
-    }
-
-    const { default: Stripe } = await import('stripe');
-    const stripe = new Stripe(stripeKey);
-    
-    let event;
-    try {
-      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-    } catch (err) {
-      return res.status(400).json({ ok: false, error: 'Invalid signature' });
-    }
-
-    switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object as any;
-        const workspaceId = session.metadata?.workspace_id;
-        const customerId = session.customer;
-        const subscriptionId = session.subscription;
-        
-        if (admin && workspaceId && customerId && subscriptionId) {
-          // Update workspace with subscription info
-          await admin
-            .from('workspaces')
-            .update({
-              stripe_customer_id: customerId,
-              stripe_subscription_id: subscriptionId,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', workspaceId);
-            
-          // Determine plan tier from price ID
-          const priceId = session.display_items?.[0]?.price?.id;
-          let planTier = 'solo';
-          if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = 'team';
-          if (priceId === process.env.STRIPE_PRICE_AGENCY) planTier = 'agency';
-          
-          await admin
-            .from('workspaces')
-            .update({ plan_tier: planTier })
-            .eq('id', workspaceId);
-        }
-        break;
+      if (!stripeKey || !webhookSecret) {
+        return res
+          .status(503)
+          .json({ ok: false, error: "Stripe not configured" });
       }
-      
-      case 'customer.subscription.updated': {
-        const subscription = event.data.object as any;
-        const workspaceId = subscription.metadata?.workspace_id;
-        
-        if (admin && workspaceId) {
-          let planTier = 'solo';
-          const priceId = subscription.items.data[0]?.price?.id;
-          if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = 'team';
-          if (priceId === process.env.STRIPE_PRICE_AGENCY) planTier = 'agency';
-          
-          await admin
-            .from('workspaces')
-            .update({ plan_tier: planTier })
-            .eq('id', workspaceId);
-        }
-        break;
-      }
-      
-      case 'customer.subscription.deleted': {
-        const subscription = event.data.object as any;
-        const workspaceId = subscription.metadata?.workspace_id;
-        
-        if (admin && workspaceId) {
-          await admin
-            .from('workspaces')
-            .update({ 
-              plan_tier: 'solo',
-              stripe_subscription_id: null,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', workspaceId);
-        }
-        break;
-      }
-    }
 
-    res.json({ ok: true });
-  }));
+      const sig = req.headers["stripe-signature"] as string;
+      if (!sig) {
+        return res.status(400).json({ ok: false, error: "Missing signature" });
+      }
+
+      const { default: Stripe } = await import("stripe");
+      const stripe = new Stripe(stripeKey);
+
+      let event;
+      try {
+        event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+      } catch (err) {
+        return res.status(400).json({ ok: false, error: "Invalid signature" });
+      }
+
+      switch (event.type) {
+        case "checkout.session.completed": {
+          const session = event.data.object as any;
+          const workspaceId = session.metadata?.workspace_id;
+          const customerId = session.customer;
+          const subscriptionId = session.subscription;
+
+          if (admin && workspaceId && customerId && subscriptionId) {
+            // Update workspace with subscription info
+            await admin
+              .from("workspaces")
+              .update({
+                stripe_customer_id: customerId,
+                stripe_subscription_id: subscriptionId,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", workspaceId);
+
+            // Determine plan tier from price ID
+            const priceId = session.display_items?.[0]?.price?.id;
+            let planTier = "solo";
+            if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = "team";
+            if (priceId === process.env.STRIPE_PRICE_AGENCY)
+              planTier = "agency";
+
+            await admin
+              .from("workspaces")
+              .update({ plan_tier: planTier })
+              .eq("id", workspaceId);
+          }
+          break;
+        }
+
+        case "customer.subscription.updated": {
+          const subscription = event.data.object as any;
+          const workspaceId = subscription.metadata?.workspace_id;
+
+          if (admin && workspaceId) {
+            let planTier = "solo";
+            const priceId = subscription.items.data[0]?.price?.id;
+            if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = "team";
+            if (priceId === process.env.STRIPE_PRICE_AGENCY)
+              planTier = "agency";
+
+            await admin
+              .from("workspaces")
+              .update({ plan_tier: planTier })
+              .eq("id", workspaceId);
+          }
+          break;
+        }
+
+        case "customer.subscription.deleted": {
+          const subscription = event.data.object as any;
+          const workspaceId = subscription.metadata?.workspace_id;
+
+          if (admin && workspaceId) {
+            await admin
+              .from("workspaces")
+              .update({
+                plan_tier: "solo",
+                stripe_subscription_id: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", workspaceId);
+          }
+          break;
+        }
+      }
+
+      res.json({ ok: true });
+    })
+  );
 
   // ──────────── /api/sequences
   app.post(
@@ -1729,7 +1892,9 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res.status(401).json({ ok: false, error: "Authentication required" });
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
       const { name, steps } = req.body as {
@@ -1737,35 +1902,35 @@ export async function buildApp(): Promise<express.Express> {
         steps: any[];
       };
 
-      const workspaceId = "demo-workspace"; // TODO: Get from auth context
+      const workspaceId = await resolveWorkspaceId(req, user);
 
       if (!admin) {
-        return res.json({ ok: true, fallback: 'no_db', sequence: null });
+        return res.json({ ok: true, fallback: "no_db", sequence: null });
       }
 
       try {
         const { data, error } = await admin
-          .from('sequences')
+          .from("sequences")
           .insert({
             workspace_id: workspaceId,
             name,
             steps,
-            is_active: true
+            is_active: true,
           })
           .select()
           .single();
 
         if (error) throw error;
-        
+
         return res.json({ ok: true, sequence: data });
       } catch (err) {
         logEvent("error", "sequence_create_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({ 
-          ok: false, 
-          error: "Failed to create sequence" 
+        return res.status(502).json({
+          ok: false,
+          error: "Failed to create sequence",
         });
       }
     })
@@ -1777,10 +1942,12 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res.status(401).json({ ok: false, error: "Authentication required" });
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
-      const workspaceId = "demo-workspace"; // TODO: Get from auth context
+      const workspaceId = await resolveWorkspaceId(req, user);
 
       if (!admin) {
         return res.json({ ok: true, sequences: [] });
@@ -1788,23 +1955,23 @@ export async function buildApp(): Promise<express.Express> {
 
       try {
         const { data, error } = await admin
-          .from('sequences')
-          .select('*')
-          .eq('workspace_id', workspaceId)
-          .eq('is_active', true)
-          .order('created_at', { ascending: false });
+          .from("sequences")
+          .select("*")
+          .eq("workspace_id", workspaceId)
+          .eq("is_active", true)
+          .order("created_at", { ascending: false });
 
         if (error) throw error;
-        
+
         return res.json({ ok: true, sequences: data || [] });
       } catch (err) {
         logEvent("error", "sequences_fetch_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({ 
-          ok: false, 
-          error: "Failed to fetch sequences" 
+        return res.status(502).json({
+          ok: false,
+          error: "Failed to fetch sequences",
         });
       }
     })
@@ -1816,26 +1983,43 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res.status(401).json({ ok: false, error: "Authentication required" });
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
       const { id } = req.params as { id: string };
       const { leadId } = req.body as { leadId: string };
 
       if (!admin) {
-        return res.json({ ok: true, fallback: 'no_db' });
+        return res.json({ ok: true, fallback: "no_db" });
       }
 
       try {
         // Get sequence details
         const { data: sequence, error: sequenceError } = await admin
-          .from('sequences')
-          .select('steps, workspace_id')
-          .eq('id', id)
+          .from("sequences")
+          .select("steps, workspace_id")
+          .eq("id", id)
           .single();
 
         if (sequenceError || !sequence) {
-          return res.status(404).json({ ok: false, error: "Sequence not found" });
+          return res
+            .status(404)
+            .json({ ok: false, error: "Sequence not found" });
+        }
+
+        await assertWorkspaceAccess(req, user, sequence.workspace_id);
+        const { data: leadRow, error: leadError } = await admin
+          .from("leads")
+          .select("workspace_id")
+          .eq("id", leadId)
+          .single();
+        if (leadError || !leadRow) {
+          return res.status(404).json({ ok: false, error: "Lead not found" });
+        }
+        if (leadRow.workspace_id !== sequence.workspace_id) {
+          throw httpError(403, "Workspace access denied.");
         }
 
         // Calculate first step send time
@@ -1845,29 +2029,29 @@ export async function buildApp(): Promise<express.Express> {
 
         // Create enrollment
         const { data: enrollment, error: enrollmentError } = await admin
-          .from('sequence_enrollments')
+          .from("sequence_enrollments")
           .insert({
             lead_id: leadId,
             sequence_id: id,
             workspace_id: sequence.workspace_id,
             current_step: 1,
-            status: 'active',
-            next_send_at: nextSendAt.toISOString()
+            status: "active",
+            next_send_at: nextSendAt.toISOString(),
           })
           .select()
           .single();
 
         if (enrollmentError) throw enrollmentError;
-        
+
         return res.json({ ok: true, enrollment });
       } catch (err) {
         logEvent("error", "sequence_enroll_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({ 
-          ok: false, 
-          error: "Failed to enroll lead in sequence" 
+        return res.status(502).json({
+          ok: false,
+          error: "Failed to enroll lead in sequence",
         });
       }
     })
@@ -1879,33 +2063,48 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res.status(401).json({ ok: false, error: "Authentication required" });
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
       const { id, leadId } = req.params as { id: string; leadId: string };
 
       if (!admin) {
-        return res.json({ ok: true, fallback: 'no_db' });
+        return res.json({ ok: true, fallback: "no_db" });
       }
 
       try {
+        const { data: enrollment, error: findError } = await admin
+          .from("sequence_enrollments")
+          .select("workspace_id")
+          .eq("sequence_id", id)
+          .eq("lead_id", leadId)
+          .single();
+        if (findError || !enrollment) {
+          return res
+            .status(404)
+            .json({ ok: false, error: "Enrollment not found" });
+        }
+        await assertWorkspaceAccess(req, user, enrollment.workspace_id);
         const { error } = await admin
-          .from('sequence_enrollments')
+          .from("sequence_enrollments")
           .delete()
-          .eq('sequence_id', id)
-          .eq('lead_id', leadId);
+          .eq("sequence_id", id)
+          .eq("lead_id", leadId)
+          .eq("workspace_id", enrollment.workspace_id);
 
         if (error) throw error;
-        
+
         return res.json({ ok: true });
       } catch (err) {
         logEvent("error", "sequence_unenroll_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({ 
-          ok: false, 
-          error: "Failed to remove lead from sequence" 
+        return res.status(502).json({
+          ok: false,
+          error: "Failed to remove lead from sequence",
         });
       }
     })
@@ -1918,7 +2117,9 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res.status(401).json({ ok: false, error: "Authentication required" });
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
       const { sequenceId, stepNumber, variants } = req.body as {
@@ -1927,28 +2128,35 @@ export async function buildApp(): Promise<express.Express> {
         variants: any[];
       };
 
-      const workspaceId = "demo-workspace"; // TODO: Get from auth context
+      const workspaceId = await resolveWorkspaceId(req, user);
 
       if (!admin) {
-        return res.json({ ok: true, fallback: 'no_db', abTestId: null });
+        return res.json({ ok: true, fallback: "no_db", abTestId: null });
       }
 
       try {
-        const abTestId = await createABTest(workspaceId, sequenceId, stepNumber, variants);
-        
+        const abTestId = await createABTest(
+          workspaceId,
+          sequenceId,
+          stepNumber,
+          variants
+        );
+
         if (abTestId) {
           return res.json({ ok: true, abTestId });
         } else {
-          return res.status(500).json({ ok: false, error: "Failed to create A/B test" });
+          return res
+            .status(500)
+            .json({ ok: false, error: "Failed to create A/B test" });
         }
       } catch (err) {
         logEvent("error", "ab_test_create_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(500).json({ 
-          ok: false, 
-          error: "Failed to create A/B test" 
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to create A/B test",
         });
       }
     })
@@ -1960,7 +2168,9 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res.status(401).json({ ok: false, error: "Authentication required" });
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
       const { id } = req.params as { id: string };
@@ -1970,8 +2180,23 @@ export async function buildApp(): Promise<express.Express> {
       }
 
       try {
+        const workspaceId = await resolveWorkspaceId(req, user);
+        const { data: abTestRow, error: abTestError } = await admin
+          .from("ab_tests")
+          .select("workspace_id")
+          .eq("id", id)
+          .single();
+        if (abTestError || !abTestRow) {
+          return res
+            .status(404)
+            .json({ ok: false, error: "A/B test not found" });
+        }
+        if (abTestRow.workspace_id !== workspaceId) {
+          throw httpError(403, "Workspace access denied.");
+        }
+
         const results = await calculateABTestPerformance(id);
-        
+
         // Check if we have enough data (min 50 sends total)
         const totalSends = results.reduce((sum, r) => sum + r.sends, 0);
         const hasEnoughData = totalSends >= 50;
@@ -1983,27 +2208,30 @@ export async function buildApp(): Promise<express.Express> {
           const secondBest = results
             .filter(r => r.intentScore < maxScore)
             .sort((a, b) => b.intentScore - a.intentScore)[0];
-          
+
           const winner = results.find(r => r.intentScore === maxScore);
-          if (winner && (!secondBest || (maxScore - secondBest.intentScore) >= 5)) {
+          if (
+            winner &&
+            (!secondBest || maxScore - secondBest.intentScore >= 5)
+          ) {
             winnerVariantId = winner.variantId;
           }
         }
 
-        return res.json({ 
-          ok: true, 
-          results, 
-          hasEnoughData, 
-          winnerVariantId 
+        return res.json({
+          ok: true,
+          results,
+          hasEnoughData,
+          winnerVariantId,
         });
       } catch (err) {
         logEvent("error", "ab_test_results_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(500).json({ 
-          ok: false, 
-          error: "Failed to get A/B test results" 
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to get A/B test results",
         });
       }
     })
@@ -2015,476 +2243,598 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res.status(401).json({ ok: false, error: "Authentication required" });
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
       const { id } = req.params as { id: string };
       const { winnerVariantId } = req.body as { winnerVariantId: string };
 
       if (!admin) {
-        return res.json({ ok: true, fallback: 'no_db' });
+        return res.json({ ok: true, fallback: "no_db" });
       }
 
       try {
+        const workspaceId = await resolveWorkspaceId(req, user);
+        const { data: abTestRow, error: abTestError } = await admin
+          .from("ab_tests")
+          .select("workspace_id")
+          .eq("id", id)
+          .single();
+        if (abTestError || !abTestRow) {
+          return res
+            .status(404)
+            .json({ ok: false, error: "A/B test not found" });
+        }
+        if (abTestRow.workspace_id !== workspaceId) {
+          throw httpError(403, "Workspace access denied.");
+        }
+
         await promoteWinner(id, winnerVariantId);
-        
+
         return res.json({ ok: true });
       } catch (err) {
         logEvent("error", "ab_test_promote_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(500).json({ 
-          ok: false, 
-          error: "Failed to promote winner" 
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to promote winner",
         });
       }
     })
   );
 
   // ──────────── /api/leads/export
-  app.get('/api/leads/export', requireAuth, asyncHandler(async (req, res) => {
-    const user = getSessionUser(req);
-    if (!user) {
-      return res.status(401).json({ ok: false, error: "Authentication required" });
-    }
-
-    const { format = 'csv', workspaceId, leadIds } = req.query as {
-      format?: string;
-      workspaceId?: string;
-      leadIds?: string;
-    };
-
-    const targetWorkspaceId = workspaceId || "demo-workspace"; // TODO: Get from auth context
-
-    if (!admin) {
-      return res.status(503).json({ ok: false, error: "Export not available without database" });
-    }
-
-    try {
-      let content: string;
-      let filename: string;
-      let mimeType: string;
-
-      switch (format) {
-        case 'csv':
-          content = await generateCSVExport(targetWorkspaceId);
-          filename = `skerry-leads-csv-${new Date().toISOString().split('T')[0]}.csv`;
-          mimeType = 'text/csv';
-          break;
-
-        case 'hubspot':
-          const hubspotData = await generateHubSpotExport(targetWorkspaceId);
-          content = JSON.stringify(hubspotData, null, 2);
-          filename = `skerry-leads-hubspot-${new Date().toISOString().split('T')[0]}.json`;
-          mimeType = 'application/json';
-          break;
-
-        case 'salesforce':
-          content = await generateSalesforceExport(targetWorkspaceId);
-          filename = `skerry-leads-salesforce-${new Date().toISOString().split('T')[0]}.csv`;
-          mimeType = 'text/csv';
-          break;
-
-        default:
-          return res.status(400).json({ ok: false, error: "Invalid format. Use: csv, hubspot, or salesforce" });
+  app.get(
+    "/api/leads/export",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
-      // Set headers for file download
-      res.setHeader('Content-Type', mimeType);
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.send(content);
+      const {
+        format = "csv",
+        workspaceId,
+        leadIds,
+      } = req.query as {
+        format?: string;
+        workspaceId?: string;
+        leadIds?: string;
+      };
 
-    } catch (err) {
-      logEvent("error", "leads_export_failed", {
-        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
-        format,
-        workspaceId: targetWorkspaceId,
-        error: String(err),
-      });
-      
-      const errorMessage = err instanceof Error ? err.message : 'Export failed';
-      return res.status(500).json({ ok: false, error: errorMessage });
-    }
-  }));
+      const targetWorkspaceId = workspaceId
+        ? workspaceId
+        : await resolveWorkspaceId(req, user);
+      await assertWorkspaceAccess(req, user, targetWorkspaceId);
+
+      if (!admin) {
+        return res
+          .status(503)
+          .json({ ok: false, error: "Export not available without database" });
+      }
+
+      try {
+        let content: string;
+        let filename: string;
+        let mimeType: string;
+
+        switch (format) {
+          case "csv":
+            content = await generateCSVExport(targetWorkspaceId);
+            filename = `skerry-leads-csv-${new Date().toISOString().split("T")[0]}.csv`;
+            mimeType = "text/csv";
+            break;
+
+          case "hubspot":
+            const hubspotData = await generateHubSpotExport(targetWorkspaceId);
+            content = JSON.stringify(hubspotData, null, 2);
+            filename = `skerry-leads-hubspot-${new Date().toISOString().split("T")[0]}.json`;
+            mimeType = "application/json";
+            break;
+
+          case "salesforce":
+            content = await generateSalesforceExport(targetWorkspaceId);
+            filename = `skerry-leads-salesforce-${new Date().toISOString().split("T")[0]}.csv`;
+            mimeType = "text/csv";
+            break;
+
+          default:
+            return res.status(400).json({
+              ok: false,
+              error: "Invalid format. Use: csv, hubspot, or salesforce",
+            });
+        }
+
+        // Set headers for file download
+        res.setHeader("Content-Type", mimeType);
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`
+        );
+        res.send(content);
+      } catch (err) {
+        logEvent("error", "leads_export_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          format,
+          workspaceId: targetWorkspaceId,
+          error: String(err),
+        });
+
+        const errorMessage =
+          err instanceof Error ? err.message : "Export failed";
+        return res.status(500).json({ ok: false, error: errorMessage });
+      }
+    })
+  );
 
   // ──────────── /api/audit/logs
-  app.get('/api/audit/logs', requireAuth, asyncHandler(async (req, res) => {
-    const user = getSessionUser(req);
-    if (!user) {
-      return res.status(401).json({ ok: false, error: "Authentication required" });
-    }
-
-    const { limit = 50, action } = req.query as {
-      limit?: string;
-      action?: string;
-    };
-
-    const workspaceId = "demo-workspace"; // TODO: Get from auth context
-
-    if (!admin) {
-      return res.json({ ok: true, logs: [] });
-    }
-
-    try {
-      const logs = await getAuditLogs(
-        workspaceId, 
-        parseInt(limit || '50') || 50,
-        action
-      );
-
-      return res.json({ ok: true, logs });
-    } catch (err) {
-      logEvent("error", "audit_logs_fetch_failed", {
-        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
-        workspaceId,
-        error: String(err),
-      });
-      return res.status(500).json({ 
-        ok: false, 
-        error: "Failed to fetch audit logs" 
-      });
-    }
-  }));
-
-  app.get('/api/audit/logs/export', requireAuth, asyncHandler(async (req, res) => {
-    const user = getSessionUser(req);
-    if (!user) {
-      return res.status(401).json({ ok: false, error: "Authentication required" });
-    }
-
-    const { format = 'csv', action } = req.query as {
-      format?: string;
-      action?: string;
-    };
-
-    const workspaceId = "demo-workspace"; // TODO: Get from auth context
-
-    if (!admin) {
-      return res.status(503).json({ ok: false, error: "Export not available without database" });
-    }
-
-    try {
-      const logs = await getAuditLogs(workspaceId, 1000, action);
-
-      if (format === 'csv') {
-        // Generate CSV
-        const headers = ['ID', 'User ID', 'Action', 'Resource Type', 'Resource ID', 'Metadata', 'Created At'];
-        const csvRows = logs.map(log => [
-          log.id,
-          log.user_id || '',
-          log.action,
-          log.resource_type || '',
-          log.resource_id || '',
-          JSON.stringify(log.metadata),
-          log.created_at
-        ]);
-
-        const csvContent = [
-          headers.join(','),
-          ...csvRows.map(row => row.map(cell => `"${cell}"`).join(','))
-        ].join('\n');
-
-        const filename = `skerry-audit-logs-${new Date().toISOString().split('T')[0]}.csv`;
-        
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.send(csvContent);
-      } else {
-        // JSON format
-        const filename = `skerry-audit-logs-${new Date().toISOString().split('T')[0]}.json`;
-        
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.json({ logs, exportedAt: new Date().toISOString() });
+  app.get(
+    "/api/audit/logs",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
-    } catch (err) {
-      logEvent("error", "audit_logs_export_failed", {
-        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
-        workspaceId,
-        format,
-        error: String(err),
-      });
-      return res.status(500).json({ 
-        ok: false, 
-        error: "Failed to export audit logs" 
-      });
-    }
-  }));
+      const { limit = 50, action } = req.query as {
+        limit?: string;
+        action?: string;
+      };
+
+      const workspaceId = await resolveWorkspaceId(req, user);
+
+      if (!admin) {
+        return res.json({ ok: true, logs: [] });
+      }
+
+      try {
+        const logs = await getAuditLogs(
+          workspaceId,
+          parseInt(String(limit || "50")) || 50,
+          action
+        );
+
+        return res.json({ ok: true, logs });
+      } catch (err) {
+        logEvent("error", "audit_logs_fetch_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          workspaceId,
+          error: String(err),
+        });
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to fetch audit logs",
+        });
+      }
+    })
+  );
+
+  app.get(
+    "/api/audit/logs/export",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      const { format = "csv", action } = req.query as {
+        format?: string;
+        action?: string;
+      };
+
+      const workspaceId = await resolveWorkspaceId(req, user);
+
+      if (!admin) {
+        return res
+          .status(503)
+          .json({ ok: false, error: "Export not available without database" });
+      }
+
+      try {
+        const logs = await getAuditLogs(workspaceId, 1000, action);
+
+        if (format === "csv") {
+          // Generate CSV
+          const headers = [
+            "ID",
+            "User ID",
+            "Action",
+            "Resource Type",
+            "Resource ID",
+            "Metadata",
+            "Created At",
+          ];
+          const csvRows = logs.map(log => [
+            log.id,
+            log.user_id || "",
+            log.action,
+            log.resource_type || "",
+            log.resource_id || "",
+            JSON.stringify(log.metadata),
+            log.created_at,
+          ]);
+
+          const csvContent = [
+            headers.join(","),
+            ...csvRows.map(row => row.map(cell => `"${cell}"`).join(",")),
+          ].join("\n");
+
+          const filename = `skerry-audit-logs-${new Date().toISOString().split("T")[0]}.csv`;
+
+          res.setHeader("Content-Type", "text/csv");
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${filename}"`
+          );
+          res.send(csvContent);
+        } else {
+          // JSON format
+          const filename = `skerry-audit-logs-${new Date().toISOString().split("T")[0]}.json`;
+
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${filename}"`
+          );
+          res.json({ logs, exportedAt: new Date().toISOString() });
+        }
+      } catch (err) {
+        logEvent("error", "audit_logs_export_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          workspaceId,
+          format,
+          error: String(err),
+        });
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to export audit logs",
+        });
+      }
+    })
+  );
 
   // ──────────── /api/leads/:id/delete-request
-  app.post('/api/leads/:id/delete-request', requireAuth, asyncHandler(async (req, res) => {
-    const user = getSessionUser(req);
-    if (!user) {
-      return res.status(401).json({ ok: false, error: "Authentication required" });
-    }
-
-    const { id } = req.params as { id: string };
-    const workspaceId = "demo-workspace"; // TODO: Get from auth context
-
-    if (!admin) {
-      return res.status(503).json({ ok: false, error: "GDPR features not available without database" });
-    }
-
-    try {
-      // Hole Lead-Email für Löschantrag
-      const { data: lead, error: leadError } = await admin
-        .from('leads')
-        .select('personal(email)')
-        .eq('id', id)
-        .single();
-
-      if (leadError || !lead) {
-        return res.status(404).json({ ok: false, error: "Lead not found" });
+  app.post(
+    "/api/leads/:id/delete-request",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
-      const userEmail = lead.personal?.email;
-      if (!userEmail) {
-        return res.status(400).json({ ok: false, error: "Lead has no email address" });
-      }
+      const { id } = req.params as { id: string };
+      const workspaceId = await resolveWorkspaceId(req, user);
 
-      // Prüfe ob bereits Löschantrag existiert
-      const hasExisting = await hasDeletionRequest(userEmail);
-      if (hasExisting) {
-        return res.json({ 
-          ok: true, 
-          message: "Deletion request already exists",
-          status: "pending"
+      if (!admin) {
+        return res.status(503).json({
+          ok: false,
+          error: "GDPR features not available without database",
         });
       }
 
-      // Erstelle Löschantrag
-      const requestId = await createDeletionRequest({
-        workspaceId,
-        leadId: id,
-        userEmail,
-        requestSource: 'user_request'
-      });
+      try {
+        // Hole Lead-Email für Löschantrag
+        const { data: lead, error: leadError } = await admin
+          .from("leads")
+          .select("email")
+          .eq("id", id)
+          .eq("workspace_id", workspaceId)
+          .single();
 
-      if (requestId) {
-        // Audit Log
-        await logAudit({
+        if (leadError || !lead) {
+          return res.status(404).json({ ok: false, error: "Lead not found" });
+        }
+
+        const userEmail = lead.email;
+        if (!userEmail) {
+          return res
+            .status(400)
+            .json({ ok: false, error: "Lead has no email address" });
+        }
+
+        // Prüfe ob bereits Löschantrag existiert
+        const hasExisting = await hasDeletionRequest(userEmail);
+        if (hasExisting) {
+          return res.json({
+            ok: true,
+            message: "Deletion request already exists",
+            status: "pending",
+          });
+        }
+
+        // Erstelle Löschantrag
+        const requestId = await createDeletionRequest({
           workspaceId,
-          userId: user.id,
-          action: 'lead.deletion_requested',
-          resourceType: 'lead',
-          resourceId: id,
-          metadata: {
-            userEmail,
+          leadId: id,
+          userEmail,
+          requestSource: "user_request",
+        });
+
+        if (requestId) {
+          // Audit Log
+          await logAudit({
+            workspaceId,
+            userId: user.id,
+            action: "lead.deletion_requested",
+            resourceType: "lead",
+            resourceId: id,
+            metadata: {
+              userEmail,
+              requestId,
+              deletionDeadline: new Date(
+                Date.now() + 30 * 24 * 60 * 60 * 1000
+              ).toISOString(),
+            },
+          });
+
+          return res.json({
+            ok: true,
+            message:
+              "Deletion request created. Data will be deleted within 30 days.",
             requestId,
-            deletionDeadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-          }
+            deletionDeadline: new Date(
+              Date.now() + 30 * 24 * 60 * 60 * 1000
+            ).toISOString(),
+          });
+        } else {
+          return res
+            .status(500)
+            .json({ ok: false, error: "Failed to create deletion request" });
+        }
+      } catch (err) {
+        logEvent("error", "deletion_request_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          leadId: id,
+          error: String(err),
         });
-
-        return res.json({ 
-          ok: true, 
-          message: "Deletion request created. Data will be deleted within 30 days.",
-          requestId,
-          deletionDeadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to create deletion request",
         });
-      } else {
-        return res.status(500).json({ ok: false, error: "Failed to create deletion request" });
       }
-
-    } catch (err) {
-      logEvent("error", "deletion_request_failed", {
-        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
-        leadId: id,
-        error: String(err),
-      });
-      return res.status(500).json({ 
-        ok: false, 
-        error: "Failed to create deletion request" 
-      });
-    }
-  }));
+    })
+  );
 
   // ──────────── /api/workspaces/:id/data-export
-  app.get('/api/workspaces/:id/data-export', requireAuth, asyncHandler(async (req, res) => {
-    const user = getSessionUser(req);
-    if (!user) {
-      return res.status(401).json({ ok: false, error: "Authentication required" });
-    }
-
-    const { id } = req.params as { id: string };
-
-    if (!admin) {
-      return res.status(503).json({ ok: false, error: "Export not available without database" });
-    }
-
-    try {
-      const data = await exportWorkspaceData(id);
-
-      // Erstelle ZIP-File (vereinfacht - nur JSON)
-      const filename = `skerry-workspace-data-${id}-${new Date().toISOString().split('T')[0]}.json`;
-      
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.json(data);
-
-      // Audit Log
-      await logAudit({
-        workspaceId: id,
-        userId: user.id,
-        action: 'workspace.data_exported',
-        resourceType: 'workspace',
-        resourceId: id,
-        metadata: {
-          exportDate: data.exportDate,
-          leadsCount: data.leads.length,
-          emailsCount: data.emails.length
-        }
-      });
-
-    } catch (err) {
-      logEvent("error", "workspace_export_failed", {
-        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
-        workspaceId: id,
-        error: String(err),
-      });
-      return res.status(500).json({ 
-        ok: false, 
-        error: "Failed to export workspace data" 
-      });
-    }
-  }));
-
-  // ──────────── /api/workspaces/:id/delete
-  app.delete('/api/workspaces/:id/delete', requireAuth, asyncHandler(async (req, res) => {
-    const user = getSessionUser(req);
-    if (!user) {
-      return res.status(401).json({ ok: false, error: "Authentication required" });
-    }
-
-    const { id } = req.params as { id: string };
-    const { confirmation } = req.body as { confirmation: string };
-
-    if (confirmation !== "DELETE_WORKSPACE") {
-      return res.status(400).json({ 
-        ok: false, 
-        error: "Confirmation required. Send { confirmation: 'DELETE_WORKSPACE' }" 
-      });
-    }
-
-    if (!admin) {
-      return res.status(503).json({ ok: false, error: "Delete not available without database" });
-    }
-
-    try {
-      // Audit Log vor Löschung
-      await logAudit({
-        workspaceId: id,
-        userId: user.id,
-        action: 'workspace.deleted',
-        resourceType: 'workspace',
-        resourceId: id,
-        metadata: {
-          deletedBy: user.email,
-          deletedAt: new Date().toISOString()
-        }
-      });
-
-      await deleteWorkspace(id);
-
-      return res.json({ 
-        ok: true, 
-        message: "Workspace and all data deleted permanently" 
-      });
-
-    } catch (err) {
-      logEvent("error", "workspace_delete_failed", {
-        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
-        workspaceId: id,
-        error: String(err),
-      });
-      return res.status(500).json({ 
-        ok: false, 
-        error: "Failed to delete workspace" 
-      });
-    }
-  }));
-
-  // ──────────── /api/workspaces/:id/brand (public endpoint)
-  app.get('/api/workspaces/:id/brand', asyncHandler(async (req, res) => {
-    const { id } = req.params as { id: string };
-
-    if (!admin) {
-      return res.json({ 
-        ok: true, 
-        brand: {
-          brand_name: "Skerry",
-          brand_logo_url: "",
-          brand_primary_color: "#06b6d4",
-          custom_domain: "",
-          from_email: "Skerry <onboarding@resend.dev>"
-        }
-      });
-    }
-
-    try {
-      const { data, error } = await admin
-        .from('workspaces')
-        .select('brand_name, brand_logo_url, brand_primary_color, custom_domain, from_email')
-        .eq('id', id)
-        .single();
-
-      if (error || !data) {
-        return res.status(404).json({ ok: false, error: "Workspace not found" });
+  app.get(
+    "/api/workspaces/:id/data-export",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
       }
 
-      return res.json({ 
-        ok: true, 
-        brand: {
-          brand_name: data.brand_name || "Skerry",
-          brand_logo_url: data.brand_logo_url || "",
-          brand_primary_color: data.brand_primary_color || "#06b6d4",
-          custom_domain: data.custom_domain || "",
-          from_email: data.from_email || "Skerry <onboarding@resend.dev>"
+      const { id } = req.params as { id: string };
+      await assertWorkspaceAccess(req, user, id);
+
+      if (!admin) {
+        return res
+          .status(503)
+          .json({ ok: false, error: "Export not available without database" });
+      }
+
+      try {
+        const data = await exportWorkspaceData(id);
+
+        // Erstelle ZIP-File (vereinfacht - nur JSON)
+        const filename = `skerry-workspace-data-${id}-${new Date().toISOString().split("T")[0]}.json`;
+
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`
+        );
+        res.json(data);
+
+        // Audit Log
+        await logAudit({
+          workspaceId: id,
+          userId: user.id,
+          action: "workspace.data_exported",
+          resourceType: "workspace",
+          resourceId: id,
+          metadata: {
+            exportDate: data.exportDate,
+            leadsCount: data.leads.length,
+            emailsCount: data.emails.length,
+          },
+        });
+      } catch (err) {
+        logEvent("error", "workspace_export_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          workspaceId: id,
+          error: String(err),
+        });
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to export workspace data",
+        });
+      }
+    })
+  );
+
+  // ──────────── /api/workspaces/:id/delete
+  app.delete(
+    "/api/workspaces/:id/delete",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      const { id } = req.params as { id: string };
+      const { confirmation } = req.body as { confirmation: string };
+
+      if (confirmation !== "DELETE_WORKSPACE") {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Confirmation required. Send { confirmation: 'DELETE_WORKSPACE' }",
+        });
+      }
+
+      await assertWorkspaceOwner(req, user, id);
+
+      if (!admin) {
+        return res
+          .status(503)
+          .json({ ok: false, error: "Delete not available without database" });
+      }
+
+      try {
+        // Audit Log vor Löschung
+        await logAudit({
+          workspaceId: id,
+          userId: user.id,
+          action: "workspace.deleted",
+          resourceType: "workspace",
+          resourceId: id,
+          metadata: {
+            deletedBy: user.email,
+            deletedAt: new Date().toISOString(),
+          },
+        });
+
+        await deleteWorkspace(id);
+
+        return res.json({
+          ok: true,
+          message: "Workspace and all data deleted permanently",
+        });
+      } catch (err) {
+        logEvent("error", "workspace_delete_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          workspaceId: id,
+          error: String(err),
+        });
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to delete workspace",
+        });
+      }
+    })
+  );
+
+  // ──────────── /api/workspaces/:id/brand (public endpoint)
+  app.get(
+    "/api/workspaces/:id/brand",
+    asyncHandler(async (req, res) => {
+      const { id } = req.params as { id: string };
+
+      if (!admin) {
+        return res.json({
+          ok: true,
+          brand: {
+            brand_name: "Skerry",
+            brand_logo_url: "",
+            brand_primary_color: "#06b6d4",
+            custom_domain: "",
+            from_email: "Skerry <onboarding@resend.dev>",
+          },
+        });
+      }
+
+      try {
+        const { data, error } = await admin
+          .from("workspaces")
+          .select(
+            "brand_name, brand_logo_url, brand_primary_color, custom_domain, from_email"
+          )
+          .eq("id", id)
+          .single();
+
+        if (error || !data) {
+          return res
+            .status(404)
+            .json({ ok: false, error: "Workspace not found" });
         }
-      });
-    } catch (err) {
-      logEvent("error", "brand_fetch_failed", {
-        requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
-        workspaceId: id,
-        error: String(err),
-      });
-      return res.status(500).json({ 
-        ok: false, 
-        error: "Failed to fetch brand settings" 
-      });
-    }
-  }));
+
+        return res.json({
+          ok: true,
+          brand: {
+            brand_name: data.brand_name || "Skerry",
+            brand_logo_url: data.brand_logo_url || "",
+            brand_primary_color: data.brand_primary_color || "#06b6d4",
+            custom_domain: data.custom_domain || "",
+            from_email: data.from_email || "Skerry <onboarding@resend.dev>",
+          },
+        });
+      } catch (err) {
+        logEvent("error", "brand_fetch_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          workspaceId: id,
+          error: String(err),
+        });
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to fetch brand settings",
+        });
+      }
+    })
+  );
 
   // ──────────── /api/webhooks/resend
-  app.post('/api/webhooks/resend', asyncHandler(async (req, res) => {
-    const signature = req.headers['resend-signature'] as string;
-    const secret = process.env.RESEND_WEBHOOK_SECRET;
+  app.post(
+    "/api/webhooks/resend",
+    asyncHandler(async (req, res) => {
+      const signature = req.headers["resend-signature"] as string;
+      const secret = process.env.RESEND_WEBHOOK_SECRET;
 
-    if (!secret || !signature) {
-      return res.status(401).json({ ok: false, error: 'Missing signature or secret' });
-    }
+      if (!secret || !signature) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Missing signature or secret" });
+      }
 
-    const payload = JSON.stringify(req.body);
-    if (!validateResendWebhook(payload, signature, secret)) {
-      return res.status(401).json({ ok: false, error: 'Invalid signature' });
-    }
+      const payload = JSON.stringify(req.body);
+      if (!validateResendWebhook(payload, signature, secret)) {
+        return res.status(401).json({ ok: false, error: "Invalid signature" });
+      }
 
-    const events = req.body as any[];
-    if (!Array.isArray(events)) {
-      return res.status(400).json({ ok: false, error: 'Invalid payload format' });
-    }
+      const events = req.body as any[];
+      if (!Array.isArray(events)) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "Invalid payload format" });
+      }
 
-    const result = await handleResendWebhook(events);
-    
-    logEvent('info', 'resend_webhook_processed', {
-      totalEvents: events.length,
-      processed: result.processed,
-      errors: result.errors
-    });
+      const result = await handleResendWebhook(events);
 
-    return res.json({ ok: true, processed: result.processed, errors: result.errors });
-  }));
+      logEvent("info", "resend_webhook_processed", {
+        totalEvents: events.length,
+        processed: result.processed,
+        errors: result.errors,
+      });
+
+      return res.json({
+        ok: true,
+        processed: result.processed,
+        errors: result.errors,
+      });
+    })
+  );
 
   // ──────────── /api/email/verify
   app.post(
@@ -2680,11 +3030,13 @@ async function startServer() {
   const server = createServer(app);
   const port = Number(process.env.PORT ?? 3001);
   server.listen(port, () => {
-    console.log(`Skerry server: http://localhost:${port}/`);
-    console.log(`Health: http://localhost:${port}/api/health`);
-    console.log(`Ready: http://localhost:${port}/api/ready`);
-    logEvent("info", "server_started", { port: port });
-    
+    logEvent("info", "server_started", {
+      port,
+      url: `http://localhost:${port}/`,
+      health: `http://localhost:${port}/api/health`,
+      ready: `http://localhost:${port}/api/ready`,
+    });
+
     // Start background jobs
     startSequenceRunner();
     startGdprProcessor();
@@ -2695,5 +3047,10 @@ const isEntrypoint = process.argv[1]
   ? path.resolve(process.argv[1]) === __filename
   : false;
 if (isEntrypoint) {
-  startServer().catch(console.error);
+  startServer().catch(err => {
+    logEvent("error", "server_start_failed", {
+      requestId: makeRequestId(),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 }

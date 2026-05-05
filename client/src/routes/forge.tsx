@@ -114,19 +114,21 @@ function ForgePage() {
     try {
       const workspaceId = useWorkspaceStore.getState().currentId;
       let profile = null;
-      
+
       if (workspaceId) {
         try {
-          const res = await fetch(`/api/workspaces/${workspaceId}/icp`, { credentials: 'include' });
+          const res = await fetch(`/api/workspaces/${workspaceId}/icp`, {
+            credentials: "include",
+          });
           const data = await res.json();
           if (data.ok && data.icp) {
             profile = data.icp;
           }
         } catch (err) {
-          console.warn('Failed to fetch ICP profile from server');
+          console.warn("Failed to fetch ICP profile from server");
         }
       }
-      
+
       // Fallback to localStorage for demo mode
       if (!profile) {
         try {
@@ -146,7 +148,10 @@ function ForgePage() {
           personContext: lead.extraction.personContext,
           uniqueAngles: lead.extraction.uniqueAngles,
         },
-        businessDescription: profile?.business_description ?? profile?.businessDescription ?? "B2B SaaS company",
+        businessDescription:
+          profile?.business_description ??
+          profile?.businessDescription ??
+          "B2B SaaS company",
         senderName: user?.name ?? "Skerry",
       });
       if (!generated.ok || !generated.markdown) {
@@ -202,7 +207,7 @@ function ForgePage() {
                 className={
                   "rounded-md px-3 py-1.5 text-xs ring-1 transition " +
                   (active
-                    ? "bg-white/10 text-foreground ring-cyan-300/40"
+                    ? "bg-white/10 text-foreground ring-purple-300/40"
                     : "bg-white/5 text-muted-foreground ring-white/10 hover:text-foreground")
                 }
               >
@@ -216,7 +221,7 @@ function ForgePage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
         <aside className="rounded-xl glass p-5">
           <div className="flex items-center gap-2 text-sm font-semibold">
-            <Variable className="h-4 w-4 text-cyan-300" />{" "}
+            <Variable className="h-4 w-4 text-purple-300" />{" "}
             {t("forge.variables")}
           </div>
           <ul className="mt-4 space-y-2">
@@ -226,7 +231,7 @@ function ForgePage() {
                 className="group flex items-center justify-between gap-3 rounded-lg bg-white/5 px-3 py-2.5 ring-1 ring-white/5"
               >
                 <div className="min-w-0 flex-1 overflow-hidden">
-                  <div className="truncate font-mono text-[10px] text-cyan-300/80">
+                  <div className="truncate font-mono text-[10px] text-purple-300/80">
                     {v.key}
                   </div>
                   <div className="mt-0.5 truncate text-[11px] text-foreground/70">
@@ -241,7 +246,7 @@ function ForgePage() {
                 </div>
                 <button
                   onClick={() => navigator.clipboard?.writeText(v.key)}
-                  className="opacity-0 transition group-hover:opacity-100 text-muted-foreground hover:text-cyan-300"
+                  className="opacity-0 transition group-hover:opacity-100 text-muted-foreground hover:text-purple-300"
                 >
                   <Copy className="h-3.5 w-3.5" />
                 </button>
@@ -251,7 +256,7 @@ function ForgePage() {
           <button
             onClick={handleGenerateWithAI}
             disabled={isGenerating}
-            className="mt-5 w-full flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-blue-600/20 to-cyan-500/20 border border-cyan-500/20 px-3 py-2.5 text-xs font-medium text-cyan-300 hover:from-blue-600/30 hover:to-cyan-500/30 transition disabled:opacity-50"
+            className="mt-5 w-full flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-purple-600/20 to-fuchsia-500/20 border border-purple-500/20 px-3 py-2.5 text-xs font-medium text-purple-300 hover:from-purple-600/30 hover:to-fuchsia-500/30 transition disabled:opacity-50"
           >
             {isGenerating ? (
               <>
@@ -279,7 +284,7 @@ function ForgePage() {
         <div className="rounded-xl glass-strong p-0 overflow-hidden">
           <div className="flex items-center justify-between border-b border-white/5 bg-white/[0.02] px-5 py-3">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="flex h-1.5 w-1.5 rounded-full bg-cyan-300" />
+              <span className="flex h-1.5 w-1.5 rounded-full bg-purple-300" />
               {t("forge.previewLabel")}
             </div>
             <div className="flex items-center gap-2">
@@ -295,7 +300,7 @@ function ForgePage() {
               <button
                 onClick={push}
                 disabled={status === "sending" || !lead.personal.email}
-                className="group relative inline-flex items-center gap-2 overflow-hidden rounded-md bg-gradient-to-r from-blue-500 to-cyan-400 px-4 py-2 text-xs font-semibold text-[#03101a] shadow-[0_0_30px_-8px_oklch(0.78_0.18_220_/_0.7)] transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+                className="group relative inline-flex items-center gap-2 overflow-hidden rounded-md bg-gradient-to-r from-purple-600 to-fuchsia-500 px-4 py-2 text-xs font-semibold text-white shadow-[0_0_30px_-8px_oklch(0.74_0.22_305_/_0.55)] transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
               >
                 <AnimatePresence mode="wait" initial={false}>
                   {status === "idle" && (
@@ -356,7 +361,7 @@ function ForgePage() {
               className="w-full p-8 min-h-[400px] max-h-[600px] overflow-y-auto bg-white/5 border-none text-sm text-foreground/85 focus:outline-none focus:ring-0 resize-none font-mono"
             />
           ) : (
-            <article className="prose prose-invert max-w-none p-8 prose-headings:tracking-tight prose-h1:text-3xl prose-h1:font-semibold prose-h1:bg-gradient-to-r prose-h1:from-blue-300 prose-h1:to-cyan-200 prose-h1:bg-clip-text prose-h1:text-transparent prose-h2:text-base prose-h2:uppercase prose-h2:tracking-[0.18em] prose-h2:text-cyan-200/90 prose-p:text-foreground/85 prose-strong:text-cyan-200 prose-blockquote:border-l-cyan-300/40 prose-blockquote:text-foreground/70 prose-hr:border-white/5">
+            <article className="prose prose-invert max-w-none p-8 prose-headings:tracking-tight prose-h1:text-3xl prose-h1:font-semibold prose-h1:bg-gradient-to-r prose-h1:from-purple-300 prose-h1:to-fuchsia-200 prose-h1:bg-clip-text prose-h1:text-transparent prose-h2:text-base prose-h2:uppercase prose-h2:tracking-[0.18em] prose-h2:text-purple-200/90 prose-p:text-foreground/85 prose-strong:text-purple-200 prose-blockquote:border-l-purple-300/40 prose-blockquote:text-foreground/70 prose-hr:border-white/5">
               <ReactMarkdown>{currentMd}</ReactMarkdown>
             </article>
           )}

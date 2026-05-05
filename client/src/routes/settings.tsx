@@ -45,6 +45,8 @@ function SettingsPage() {
   const tier = useAccountTierStore(s => s.tier);
   const setTier = useAccountTierStore(s => s.setTier);
   const config = TIER_CONFIGS[tier];
+  const tierLabel = t(`tier.${tier}.label`);
+  const tierDescription = t(`tier.${tier}.description`);
   const getTierUsage = useUsageStore(s => s.getTierUsage);
   const setRunsUsedFromServer = useUsageStore(s => s.setRunsUsedFromServer);
   const resetAllUsage = useUsageStore(s => s.resetAllUsage);
@@ -79,40 +81,40 @@ function SettingsPage() {
   // Status of provider-paid AI services. Customers see a high-level status,
   // never the actual keys. Developers see masked keys.
   const services: Array<{
-    name: string;
     service: "openai" | "apify" | "instantly" | "neverbounce" | "resend";
     description: string;
     customerLabel: string;
+    developerLabel: string;
   }> = [
     {
-      name: "AI Generation",
       service: "openai",
-      description: "Lead intelligence + email writing",
-      customerLabel: "AI engine",
+      description: t("settings.services.openai.description"),
+      customerLabel: t("settings.services.openai.label"),
+      developerLabel: t("settings.services.openai.devName"),
     },
     {
-      name: "Web Scraping",
       service: "apify",
-      description: "LinkedIn + company website discovery",
-      customerLabel: "Data sourcing",
+      description: t("settings.services.apify.description"),
+      customerLabel: t("settings.services.apify.label"),
+      developerLabel: t("settings.services.apify.devName"),
     },
     {
-      name: "Email Verification",
       service: "neverbounce",
-      description: "Verify email deliverability before send",
-      customerLabel: "Email verification",
+      description: t("settings.services.neverbounce.description"),
+      customerLabel: t("settings.services.neverbounce.label"),
+      developerLabel: t("settings.services.neverbounce.devName"),
     },
     {
-      name: "Email Sending",
       service: "resend",
-      description: "Outbound email delivery",
-      customerLabel: "Email delivery",
+      description: t("settings.services.resend.description"),
+      customerLabel: t("settings.services.resend.label"),
+      developerLabel: t("settings.services.resend.devName"),
     },
     {
-      name: "Cadence",
       service: "instantly",
-      description: "Cold-email sequence orchestration",
-      customerLabel: "Sequence engine",
+      description: t("settings.services.instantly.description"),
+      customerLabel: t("settings.services.instantly.label"),
+      developerLabel: t("settings.services.instantly.devName"),
     },
   ];
 
@@ -123,12 +125,15 @@ function SettingsPage() {
           {t("settings.eyebrow.integrations")}
         </span>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">
-          AI <span className="text-gradient-cyber">Services</span>
+          {t("settings.servicesHeadingA")}{" "}
+          <span className="text-gradient-cyber">
+            {t("settings.servicesHeadingB")}
+          </span>
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
           {isDeveloper
-            ? "Provider-paid services. Keys live in .env at the project root. Customers never see this surface."
-            : "Skerry runs every external service for you. Your subscription covers AI, scraping, verification, and delivery."}
+            ? t("settings.servicesDesc.developer")
+            : t("settings.servicesDesc.customer")}
         </p>
       </div>
 
@@ -152,16 +157,20 @@ function SettingsPage() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold">
-                    {isDeveloper ? s.name : s.customerLabel}
+                    {isDeveloper
+                      ? s.developerLabel
+                      : t(`settings.services.${s.service}.label`)}
                   </span>
                   <span
                     className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ok ? "bg-emerald-500/10 text-emerald-300" : "bg-amber-500/10 text-amber-300"}`}
                   >
-                    {ok ? "Connected" : "Not configured"}
+                    {ok
+                      ? t("settings.status.connected")
+                      : t("settings.status.notConfigured")}
                   </span>
                 </div>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  {s.description}
+                  {t(`settings.services.${s.service}.description`)}
                 </p>
                 {isDeveloper && (
                   <div className="mt-2 inline-flex items-center gap-2 rounded-md bg-black/30 px-2.5 py-1 ring-1 ring-white/5">
@@ -169,7 +178,7 @@ function SettingsPage() {
                     <code className="font-mono text-[11px] text-foreground/70">
                       {ok
                         ? `${apiConfig[s.service].slice(0, 8)}…${apiConfig[s.service].slice(-4)}`
-                        : "(empty in .env)"}
+                        : t("settings.emptyEnv")}
                     </code>
                   </div>
                 )}
@@ -180,15 +189,14 @@ function SettingsPage() {
       </div>
 
       {!isDeveloper && (
-        <div className="flex items-start gap-3 rounded-xl glass p-4 ring-1 ring-cyan-500/15">
-          <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-300" />
+        <div className="flex items-start gap-3 rounded-xl glass p-4 ring-1 ring-purple-500/15">
+          <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-purple-700 dark:text-purple-300" />
           <div className="text-xs text-foreground/80">
             <div className="font-semibold text-foreground">
-              All AI services are managed by Skerry.
+              {t("settings.customerManaged.title")}
             </div>
             <div className="mt-0.5 text-muted-foreground">
-              Your subscription covers OpenAI, web scraping, email verification,
-              and delivery. No keys to manage, no rate-limit surprises.
+              {t("settings.customerManaged.subtitle")}
             </div>
           </div>
         </div>
@@ -198,13 +206,11 @@ function SettingsPage() {
         <div className="flex items-start gap-3 rounded-xl glass p-4 ring-1 ring-purple-500/20">
           <Code2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-purple-300" />
           <div className="text-xs text-foreground/80">
-            <div className="font-semibold text-foreground">Developer view</div>
+            <div className="font-semibold text-foreground">
+              {t("settings.developerView.title")}
+            </div>
             <div className="mt-0.5 text-muted-foreground">
-              Keys are sourced from <code className="font-mono">.env</code> via{" "}
-              <code className="font-mono">VITE_OPENAI_API_KEY</code>,{" "}
-              <code className="font-mono">VITE_APIFY_API_KEY</code>, etc. Edit
-              the file at the project root and restart the dev server. Customers
-              never see this section.
+              {t("settings.developerView.subtitle")}
             </div>
           </div>
         </div>
@@ -212,13 +218,13 @@ function SettingsPage() {
 
       <div className="pt-4 border-t border-white/5">
         <span className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-          Account
+          {t("settings.eyebrow.account")}
         </span>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-          Plan & Usage
+          {t("settings.title.planUsage")}
         </h2>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Your current plan determines research depth and monthly lead limits.
+          {t("settings.planUsage.subtitle")}
         </p>
         <div className="mt-4 grid grid-cols-3 gap-3">
           {(["solo", "team", "agency"] as const).map(planTier => {
@@ -233,13 +239,13 @@ function SettingsPage() {
                 ? "border-blue-400/40 bg-blue-500/10"
                 : "border-white/10 bg-white/5",
               agency: active
-                ? "border-cyan-400/40 bg-cyan-500/10"
+                ? "border-purple-400/40 bg-purple-500/10"
                 : "border-white/10 bg-white/5",
             };
             const labelColors = {
               solo: "text-slate-300",
               team: "text-blue-300",
-              agency: "text-cyan-300",
+              agency: "text-purple-300",
             };
             return (
               <button
@@ -257,14 +263,14 @@ function SettingsPage() {
                   {planTier}
                 </div>
                 <div className="mt-1 text-[11px] text-muted-foreground">
-                  {cfg.label}
+                  {t(`tier.${planTier}.label`)}
                 </div>
                 <div className="mt-2 text-[11px] text-foreground/60">
-                  {cfg.monthlyLimit} leads/mo
+                  {cfg.monthlyLimit} {t("settings.planUsage.leadsPerMonth")}
                 </div>
                 {active && (
                   <div className="mt-2 flex items-center gap-1 text-[10px] text-emerald-400">
-                    <CheckCircle2 className="h-3 w-3" /> Active
+                    <CheckCircle2 className="h-3 w-3" /> {t("common.active")}
                   </div>
                 )}
               </button>
@@ -273,28 +279,31 @@ function SettingsPage() {
         </div>
         {!canChangePlan && (
           <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">
-            <div className="font-semibold">Plan changes are managed centrally.</div>
+            <div className="font-semibold">
+              {t("settings.planUsage.locked")}
+            </div>
             <p className="mt-1 text-amber-200/90">
-              For enterprise or agency upgrades, contact sales or your account manager.
-              Your current plan is enforced by your subscription and usage entitlements.
+              {t("settings.planUsage.lockedDesc")}
             </p>
           </div>
         )}
         <div className="mt-4 rounded-xl glass p-4">
           <div className="mb-2 flex items-center justify-between text-xs">
             <span className="text-muted-foreground">
-              Monthly Usage ({config.label})
+              {t("settings.planUsage.monthlyUsage")} ({tierLabel})
             </span>
             <span className="text-foreground">
-              {tierUsage.runsUsed} / {config.monthlyLimit} runs
+              {tierUsage.runsUsed} / {config.monthlyLimit}{" "}
+              {t("settings.planUsage.runs")}
             </span>
           </div>
           <Progress value={usagePct} className="h-1.5" />
           <p className="mt-2 text-[11px] text-muted-foreground">
-            {config.description}
+            {tierDescription}
           </p>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            Leads generated: {tierUsage.leadsGenerated} · Estimated AI spend: $
+            {t("settings.planUsage.leadsGenerated")}: {tierUsage.leadsGenerated}{" "}
+            · {t("settings.planUsage.estimatedSpend")}: $
             {tierUsage.estimatedSpendUsd.toFixed(2)}
           </p>
         </div>
@@ -311,7 +320,7 @@ function SettingsPage() {
           {t("settings.language.subtitle")}
         </p>
         <div className="mt-4 inline-flex items-center gap-2 rounded-xl glass p-2">
-          <Languages className="ml-2 h-4 w-4 text-cyan-300" />
+          <Languages className="ml-2 h-4 w-4 text-purple-700 dark:text-purple-300" />
           {(["en", "de"] as const).map(lang => {
             const active = language === lang;
             return (
@@ -319,7 +328,11 @@ function SettingsPage() {
                 key={lang}
                 type="button"
                 onClick={() => setLanguage(lang as Language)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${active ? "bg-cyan-300/15 text-cyan-100 ring-1 ring-cyan-300/30" : "text-muted-foreground hover:text-foreground"}`}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                  active
+                    ? "bg-purple-500/10 text-purple-800 ring-1 ring-purple-500/30 dark:bg-purple-300/15 dark:text-purple-100 dark:ring-purple-300/30"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
               >
                 {lang === "en"
                   ? t("settings.language.en")
@@ -330,15 +343,29 @@ function SettingsPage() {
         </div>
 
         <div className="mt-6">
-          <h3 className="text-base font-semibold tracking-tight">Theme</h3>
+          <h3 className="text-base font-semibold tracking-tight">
+            {t("settings.theme.title")}
+          </h3>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Choose your appearance mode for the app.
+            {t("settings.theme.subtitle")}
           </p>
           <div className="mt-4 inline-flex items-center gap-2 rounded-xl glass p-2">
             {[
-              { value: "light" as const, label: "Light", icon: Sun },
-              { value: "dark" as const, label: "Dark", icon: Moon },
-              { value: "system" as const, label: "System", icon: Monitor },
+              {
+                value: "light" as const,
+                label: t("settings.theme.light"),
+                icon: Sun,
+              },
+              {
+                value: "dark" as const,
+                label: t("settings.theme.dark"),
+                icon: Moon,
+              },
+              {
+                value: "system" as const,
+                label: t("settings.theme.system"),
+                icon: Monitor,
+              },
             ].map(themeOption => {
               const active = mode === themeOption.value;
               const Icon = themeOption.icon;
@@ -349,7 +376,7 @@ function SettingsPage() {
                   onClick={() => setMode(themeOption.value)}
                   className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                     active
-                      ? "bg-cyan-300/15 text-cyan-100 ring-1 ring-cyan-300/30"
+                      ? "bg-purple-500/10 text-purple-800 ring-1 ring-purple-500/30 dark:bg-purple-300/15 dark:text-purple-100 dark:ring-purple-300/30"
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
@@ -364,86 +391,86 @@ function SettingsPage() {
 
       <div className="pt-2 border-t border-white/5">
         <span className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-          Enterprise Features
+          {t("settings.eyebrow.enterprise")}
         </span>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-          Branding & White-Label
+          {t("branding.title")}
         </h2>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Customize the app appearance for your agency or enterprise clients.
+          {t("branding.subtitle")}
         </p>
         <Button
-          onClick={() => window.location.href = '/branding'}
+          onClick={() => (window.location.href = "/branding")}
           className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white/5 px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-white/10 transition ring-1 ring-white/10"
         >
           <Sparkles className="h-4 w-4" />
-          Configure Branding
+          {t("settings.actions.configureBranding")}
         </Button>
       </div>
 
       <div className="pt-2 border-t border-white/5">
         <span className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-          Compliance & Security
+          {t("settings.eyebrow.compliance")}
         </span>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-          Audit Logs
+          {t("audit.title")}
         </h2>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Complete activity tracking for compliance and security monitoring.
+          {t("audit.subtitle")}
         </p>
         <Button
-          onClick={() => window.location.href = '/audit'}
+          onClick={() => (window.location.href = "/audit")}
           className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white/5 px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-white/10 transition ring-1 ring-white/10"
         >
           <ShieldCheck className="h-4 w-4" />
-          View Audit Logs
+          {t("settings.actions.viewAuditLogs")}
         </Button>
       </div>
 
       <div className="pt-2 border-t border-white/5">
         <span className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-          GDPR Compliance
+          {t("settings.eyebrow.gdpr")}
         </span>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-          Data Privacy
+          {t("gdpr.title")}
         </h2>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Export your data or request deletion under GDPR requirements.
+          {t("gdpr.subtitle")}
         </p>
         <div className="mt-4 flex gap-2">
           <Button
-            onClick={() => window.location.href = '/workspace'}
+            onClick={() => (window.location.href = "/workspace")}
             className="inline-flex items-center gap-2 rounded-lg bg-white/5 px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-white/10 transition ring-1 ring-white/10"
           >
             <FileSpreadsheet className="h-4 w-4" />
-            Export Data
+            {t("gdpr.exportData")}
           </Button>
           <Button
-            onClick={() => window.location.href = '/workspace'}
+            onClick={() => (window.location.href = "/workspace")}
             className="inline-flex items-center gap-2 rounded-lg bg-red-500/10 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-500/20 transition ring-1 ring-red-500/30"
           >
             <RotateCcw className="h-4 w-4" />
-            Delete Account
+            {t("gdpr.deleteAccount")}
           </Button>
         </div>
       </div>
 
       <div className="pt-2 border-t border-white/5">
         <span className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-          System
+          {t("settings.eyebrow.system")}
         </span>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-          Onboarding
+          {t("settings.onboarding.title")}
         </h2>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Reset your business profile and account tier selection.
+          {t("settings.onboarding.subtitle")}
         </p>
         <Button
           onClick={handleResetOnboarding}
           className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white/5 px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-white/10 transition ring-1 ring-white/10"
         >
           <RotateCcw className="h-4 w-4" />
-          Reset Onboarding
+          {t("settings.onboarding.reset")}
         </Button>
       </div>
     </div>

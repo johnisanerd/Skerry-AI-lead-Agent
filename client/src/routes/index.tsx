@@ -38,7 +38,7 @@ const stageMeta: Record<
 > = {
   source: {
     labelKey: "pulse.stage.scraping",
-    tone: "text-cyan-300",
+    tone: "text-purple-300",
     Icon: Loader2,
   },
   analyze: {
@@ -81,28 +81,28 @@ function PulseDashboard() {
           ? `${stats.withVerifiedEmail} with email`
           : "no leads yet",
       icon: Telescope,
-      accent: "from-blue-400/30 to-cyan-300/10",
+      accent: "from-purple-400/30 to-fuchsia-300/10",
     },
     {
       labelKey: "pulse.stat.insights",
       value: stats.insightsGenerated,
       metric: stats.insightsGenerated > 0 ? "AI-extracted" : "—",
       icon: BrainCircuit,
-      accent: "from-cyan-400/30 to-blue-300/10",
+      accent: "from-fuchsia-400/30 to-purple-300/10",
     },
     {
       labelKey: "pulse.stat.newsletters",
       value: stats.emailsReady,
       metric: stats.emailsReady > 0 ? "ready to send" : "—",
       icon: FileText,
-      accent: "from-sky-400/30 to-cyan-300/10",
+      accent: "from-violet-400/30 to-fuchsia-300/10",
     },
     {
       labelKey: "pulse.stat.pushed",
       value: stats.sent,
       metric: stats.sent > 0 ? "dispatched" : "—",
       icon: Send,
-      accent: "from-emerald-400/30 to-cyan-300/10",
+      accent: "from-emerald-400/30 to-purple-300/10",
     },
   ];
 
@@ -112,10 +112,10 @@ function PulseDashboard() {
     <div className="space-y-10">
       {/* Hero */}
       <section className="relative overflow-hidden rounded-2xl glass-strong p-8">
-        <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-gradient-to-br from-blue-500/30 to-cyan-300/10 blur-3xl" />
+        <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-gradient-to-br from-purple-500/30 to-fuchsia-500/10 blur-3xl" />
         <div className="relative flex flex-col gap-3">
           <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-            <span className="h-1 w-1 rounded-full bg-cyan-300" />
+            <span className="h-1 w-1 rounded-full bg-purple-300" />
             {t("pulse.eyebrow")}
           </span>
           <h1 className="max-w-3xl text-4xl font-semibold tracking-tight md:text-5xl">
@@ -149,7 +149,7 @@ function PulseDashboard() {
               />
               <div className="relative flex items-center justify-between">
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 ring-1 ring-white/10">
-                  <Icon className="h-4 w-4 text-cyan-300" />
+                  <Icon className="h-4 w-4 text-purple-300" />
                 </div>
               </div>
               <div className="relative mt-6">
@@ -159,7 +159,9 @@ function PulseDashboard() {
                 <div className="mt-1 text-xs uppercase tracking-wider text-muted-foreground">
                   {label}
                 </div>
-                <div className="mt-2 text-xs text-cyan-300/80">{c.metric}</div>
+                <div className="mt-2 text-xs text-purple-300/80">
+                  {c.metric}
+                </div>
               </div>
             </motion.div>
           );
@@ -181,8 +183,8 @@ function PulseDashboard() {
             {!isEmpty && (
               <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
                 <span className="relative flex h-1.5 w-1.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-300 opacity-70" />
-                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-cyan-300" />
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-purple-300 opacity-70" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-purple-300" />
                 </span>
                 {t("pulse.feed.streaming")}
               </span>
@@ -192,7 +194,7 @@ function PulseDashboard() {
           {isEmpty ? (
             <EmptyFeed />
           ) : (
-            <ol className="relative mt-6 space-y-2 before:absolute before:left-[15px] before:top-2 before:bottom-2 before:w-px before:bg-gradient-to-b before:from-cyan-300/40 before:via-white/10 before:to-transparent">
+            <ol className="relative mt-6 space-y-2 before:absolute before:left-[15px] before:top-2 before:bottom-2 before:w-px before:bg-gradient-to-b before:from-purple-300/40 before:via-white/10 before:to-transparent">
               {liveFeed.map((lead, i) => {
                 const meta = stageMeta[lead.stage];
                 const Icon = meta.Icon;
@@ -237,7 +239,7 @@ function PulseDashboard() {
                     </div>
                     <Link
                       to="/workspace"
-                      className="opacity-0 transition group-hover:opacity-100 hover:opacity-100 text-cyan-300 hover:text-cyan-200"
+                      className="opacity-0 transition group-hover:opacity-100 hover:opacity-100 text-purple-300 hover:text-purple-200"
                     >
                       <ArrowUpRight className="h-4 w-4" />
                     </Link>
@@ -280,7 +282,7 @@ function PulseDashboard() {
                   </div>
                   <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/5">
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-blue-400 to-cyan-300 transition-all"
+                      className="h-full rounded-full bg-gradient-to-r from-purple-500 to-fuchsia-400 transition-all"
                       style={{ width: `${b.pct}%` }}
                     />
                   </div>
@@ -290,7 +292,7 @@ function PulseDashboard() {
           </div>
 
           <div className="relative overflow-hidden rounded-xl glass p-6">
-            <div className="absolute -bottom-12 -right-10 h-40 w-40 rounded-full bg-cyan-400/20 blur-3xl" />
+            <div className="absolute -bottom-12 -right-10 h-40 w-40 rounded-full bg-purple-400/20 blur-3xl" />
             <h3 className="text-sm font-semibold">{t("pulse.focus.title")}</h3>
             <p className="mt-1 text-xs text-muted-foreground">
               {isEmpty
@@ -334,8 +336,8 @@ function PulseDashboard() {
 function EmptyFeed() {
   return (
     <div className="mt-6 flex flex-col items-center justify-center rounded-xl border border-dashed border-white/10 bg-white/[0.015] px-6 py-12 text-center">
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-cyan-500/10 ring-1 ring-cyan-500/20">
-        <Search className="h-5 w-5 text-cyan-300" />
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-purple-500/10 ring-1 ring-purple-500/20">
+        <Search className="h-5 w-5 text-purple-300" />
       </div>
       <h3 className="text-sm font-semibold text-foreground">No leads yet</h3>
       <p className="mt-1 max-w-sm text-xs text-muted-foreground">

@@ -36,7 +36,7 @@ export function LoginPage() {
       {/* Glow blobs */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
         <div className="absolute -top-40 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-blue-600/20 blur-[120px]" />
-        <div className="absolute bottom-0 right-1/4 h-72 w-72 rounded-full bg-cyan-500/15 blur-[100px]" />
+        <div className="absolute bottom-0 right-1/4 h-72 w-72 rounded-full bg-purple-500/15 blur-[100px]" />
       </div>
 
       <motion.div
@@ -47,10 +47,10 @@ export function LoginPage() {
       >
         {/* Logo / Brand */}
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-400 shadow-[0_0_40px_-8px_oklch(0.78_0.18_220_/_0.7)]">
-            <Zap className="h-7 w-7 text-[#03101a]" strokeWidth={2.5} />
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-purple-600 to-fuchsia-500 shadow-[0_0_40px_-8px_oklch(0.74_0.22_305_/_0.55)]">
+            <Zap className="h-7 w-7 text-white" strokeWidth={2.5} />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+          <h1 className="text-2xl font-bold tracking-tight text-white">
             Skerry
           </h1>
           <p className="mt-1 text-sm font-medium text-slate-200">
@@ -76,7 +76,7 @@ export function LoginPage() {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="you@company.com"
-                  className="pl-9 bg-white/5 border-white/10 focus:border-cyan-500/50 focus:ring-cyan-500/20"
+                  className="pl-9 bg-white/5 border-white/10 focus:border-purple-500/50 focus:ring-purple-500/20"
                   required
                   autoComplete="email"
                 />
@@ -98,7 +98,7 @@ export function LoginPage() {
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="pl-9 pr-10 bg-white/5 border-white/10 focus:border-cyan-500/50 focus:ring-cyan-500/20"
+                  className="pl-9 pr-10 bg-white/5 border-white/10 focus:border-purple-500/50 focus:ring-purple-500/20"
                   required
                   autoComplete="current-password"
                 />
@@ -129,7 +129,7 @@ export function LoginPage() {
             <Button
               type="submit"
               disabled={loading}
-              className="w-full h-11 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-semibold shadow-[0_0_30px_-8px_oklch(0.78_0.18_220_/_0.6)] transition-all"
+              className="w-full h-11 bg-gradient-to-r from-purple-600 to-fuchsia-500 hover:from-purple-500 hover:to-fuchsia-400 text-white font-semibold shadow-[0_0_30px_-8px_oklch(0.74_0.22_305_/_0.5)] transition-all"
             >
               {loading ? (
                 <>
@@ -161,7 +161,7 @@ export function LoginPage() {
                   {
                     label: "Agency",
                     email: "agency@skerry.io",
-                    color: "text-cyan-300",
+                    color: "text-purple-300",
                   },
                 ].map(acc => (
                   <button

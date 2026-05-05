@@ -260,21 +260,21 @@ export const useLeadStore = create<LeadStore>((set, get) => ({
         };
       });
       const updatedLeads = [...s.leads, ...mapped];
-      
+
       // Fire-and-forget persist to Supabase
       const workspaceId = useWorkspaceStore.getState().currentId;
       if (workspaceId) {
-        fetch('/api/leads/persist', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ leads: mapped, workspaceId })
+        fetch("/api/leads/persist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ leads: mapped, workspaceId }),
         }).catch(() => {
           // Gracefully ignore persistence errors
-          console.warn('Failed to persist leads to database');
+          console.warn("Failed to persist leads to database");
         });
       }
-      
+
       return {
         leads: updatedLeads,
         selectedId: s.selectedId || mapped[0]?.id || "",

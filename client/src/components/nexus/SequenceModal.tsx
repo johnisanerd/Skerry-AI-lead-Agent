@@ -3,18 +3,35 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, X, Play, Pause, Trash2, Mail, Clock, GitBranch } from "lucide-react";
+import {
+  Plus,
+  X,
+  Play,
+  Pause,
+  Trash2,
+  Mail,
+  Clock,
+  GitBranch,
+} from "lucide-react";
 import { toast } from "sonner";
+import { useT } from "@/lib/i18n";
+import { useWorkspaceStore } from "@/store/workspaceStore";
 
 interface SequenceStep {
   stepNumber: number;
   delayDays: number;
   subjectTemplate: string;
   bodyTemplate: string;
-  condition: 'always' | 'no_reply' | 'no_open';
+  condition: "always" | "no_reply" | "no_open";
 }
 
 interface Sequence {
@@ -30,9 +47,14 @@ interface SequenceModalProps {
 }
 
 export function SequenceModal({ open, onClose }: SequenceModalProps) {
+  const t = useT();
   const [sequences, setSequences] = useState<Sequence[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [newSequenceName, setNewSequenceName] = useState("");
+  const workspaceId = useWorkspaceStore(s => s.currentId);
+  const workspaceHeaders: Record<string, string> = workspaceId
+    ? { "x-workspace-id": workspaceId }
+    : {};
   const [newSteps, setNewSteps] = useState<SequenceStep[]>([
     {
       stepNumber: 1,
@@ -46,39 +68,45 @@ Hätten Sie 15 Minuten für ein kurzes Gespräch?
 
 Viele Grüße,
 {{sender_name}}`,
-      condition: 'always'
-    }
+      condition: "always",
+    },
   ]);
 
   const CONDITION_OPTIONS = [
-    { value: 'always', label: 'Immer senden' },
-    { value: 'no_reply', label: 'Nur wenn keine Antwort' },
-    { value: 'no_open', label: 'Nur wenn nicht geöffnet' },
+    { value: "always", label: t("sequences.always") },
+    { value: "no_reply", label: t("sequences.noReply") },
+    { value: "no_open", label: t("sequences.noOpen") },
   ];
 
   const TEMPLATE_VARIABLES = [
-    { var: '{{first_name}}', desc: 'Vorname' },
-    { var: '{{last_name}}', desc: 'Nachname' },
-    { var: '{{company}}', desc: 'Unternehmen' },
-    { var: '{{title}}', desc: 'Position' },
-    { var: '{{business_description}}', desc: 'Business-Beschreibung' },
-    { var: '{{sender_name}}', desc: 'Absender Name' },
+    { var: "{{first_name}}", desc: t("sequences.firstName") },
+    { var: "{{last_name}}", desc: t("sequences.lastName") },
+    { var: "{{company}}", desc: t("sequences.company") },
+    { var: "{{title}}", desc: t("sequences.jobTitle") },
+    {
+      var: "{{business_description}}",
+      desc: t("sequences.businessDescription"),
+    },
+    { var: "{{sender_name}}", desc: t("sequences.senderName") },
   ];
 
   const addStep = () => {
     const nextStepNumber = Math.max(...newSteps.map(s => s.stepNumber), 0) + 1;
-    setNewSteps([...newSteps, {
-      stepNumber: nextStepNumber,
-      delayDays: 3,
-      subjectTemplate: `Follow-up #${nextStepNumber}`,
-      bodyTemplate: `Hi {{first_name}},
+    setNewSteps([
+      ...newSteps,
+      {
+        stepNumber: nextStepNumber,
+        delayDays: 3,
+        subjectTemplate: `Follow-up #${nextStepNumber}`,
+        bodyTemplate: `Hi {{first_name}},
 
 Ich wollte nur nachhaken.
 
 Viele Grüße,
 {{sender_name}}`,
-      condition: 'no_reply'
-    }]);
+        condition: "no_reply",
+      },
+    ]);
   };
 
   const removeStep = (stepNumber: number) => {
@@ -86,43 +114,46 @@ Viele Grüße,
   };
 
   const updateStep = (stepNumber: number, updates: Partial<SequenceStep>) => {
-    setNewSteps(newSteps.map(s => 
-      s.stepNumber === stepNumber ? { ...s, ...updates } : s
-    ));
+    setNewSteps(
+      newSteps.map(s =>
+        s.stepNumber === stepNumber ? { ...s, ...updates } : s
+      )
+    );
   };
 
   const createSequence = async () => {
     if (!newSequenceName.trim()) {
-      toast.error('Name ist erforderlich');
+      toast.error(t("sequences.nameRequired"));
       return;
     }
 
     if (newSteps.length === 0) {
-      toast.error('Mindestens ein Step ist erforderlich');
+      toast.error(t("sequences.stepRequired"));
       return;
     }
 
     setIsCreating(true);
     try {
-      const res = await fetch('/api/sequences', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+      const res = await fetch("/api/sequences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...workspaceHeaders },
+        credentials: "include",
         body: JSON.stringify({
           name: newSequenceName.trim(),
-          steps: newSteps
-        })
+          steps: newSteps,
+        }),
       });
 
       const data = await res.json();
       if (data.ok) {
-        toast.success('Sequence erstellt');
+        toast.success(t("sequences.created"));
         setNewSequenceName("");
-        setNewSteps([{
-          stepNumber: 1,
-          delayDays: 0,
-          subjectTemplate: "Re: {{first_name}}",
-          bodyTemplate: `Hi {{first_name}},
+        setNewSteps([
+          {
+            stepNumber: 1,
+            delayDays: 0,
+            subjectTemplate: "Re: {{first_name}}",
+            bodyTemplate: `Hi {{first_name}},
 
 {{business_description}} könnte für {{company}} interessant sein.
 
@@ -130,14 +161,15 @@ Hätten Sie 15 Minuten für ein kurzes Gespräch?
 
 Viele Grüße,
 {{sender_name}}`,
-          condition: 'always'
-        }]);
+            condition: "always",
+          },
+        ]);
         loadSequences();
       } else {
-        toast.error(data.error || 'Fehler beim Erstellen');
+        toast.error(data.error || t("sequences.error"));
       }
     } catch (err) {
-      toast.error('Verbindung zum Server fehlgeschlagen');
+      toast.error(t("sequences.error"));
     } finally {
       setIsCreating(false);
     }
@@ -145,13 +177,16 @@ Viele Grüße,
 
   const loadSequences = async () => {
     try {
-      const res = await fetch('/api/sequences', { credentials: 'include' });
+      const res = await fetch("/api/sequences", {
+        credentials: "include",
+        headers: workspaceHeaders,
+      });
       const data = await res.json();
       if (data.ok) {
         setSequences(data.sequences || []);
       }
     } catch (err) {
-      console.error('Failed to load sequences:', err);
+      console.error("Failed to load sequences:", err);
     }
   };
 
@@ -162,7 +197,7 @@ Viele Grüße,
       <div className="bg-[#0a1628] border border-white/10 rounded-xl p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
-            <GitBranch className="w-5 h-5 text-cyan-300" />
+            <GitBranch className="w-5 h-5 text-purple-300" />
             <h2 className="text-xl font-semibold">Sequence Engine</h2>
           </div>
           <Button variant="ghost" onClick={onClose}>
@@ -182,7 +217,7 @@ Viele Grüße,
                 <Input
                   placeholder="z.B. Standard Follow-up"
                   value={newSequenceName}
-                  onChange={(e) => setNewSequenceName(e.target.value)}
+                  onChange={e => setNewSequenceName(e.target.value)}
                 />
               </div>
 
@@ -195,8 +230,11 @@ Viele Grüße,
                   </Button>
                 </div>
 
-                {newSteps.map((step) => (
-                  <Card key={step.stepNumber} className="border-l-4 border-l-blue-500">
+                {newSteps.map(step => (
+                  <Card
+                    key={step.stepNumber}
+                    className="border-l-4 border-l-blue-500"
+                  >
                     <CardContent className="pt-4">
                       <div className="flex items-center justify-between mb-4">
                         <h4 className="font-medium">Step {step.stepNumber}</h4>
@@ -216,25 +254,32 @@ Viele Grüße,
                             type="number"
                             min="0"
                             value={step.delayDays}
-                            onChange={(e) => updateStep(step.stepNumber, { 
-                              delayDays: parseInt(e.target.value) || 0 
-                            })}
+                            onChange={e =>
+                              updateStep(step.stepNumber, {
+                                delayDays: parseInt(e.target.value) || 0,
+                              })
+                            }
                           />
                         </div>
                         <div>
                           <Label>Bedingung</Label>
                           <Select
                             value={step.condition}
-                            onValueChange={(value: any) => updateStep(step.stepNumber, { 
-                              condition: value 
-                            })}
+                            onValueChange={(value: any) =>
+                              updateStep(step.stepNumber, {
+                                condition: value,
+                              })
+                            }
                           >
                             <SelectTrigger>
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
                               {CONDITION_OPTIONS.map(option => (
-                                <SelectItem key={option.value} value={option.value}>
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
                                   {option.label}
                                 </SelectItem>
                               ))}
@@ -248,9 +293,11 @@ Viele Grüße,
                         <Input
                           placeholder="Email Betreff mit {{variables}}"
                           value={step.subjectTemplate}
-                          onChange={(e) => updateStep(step.stepNumber, { 
-                            subjectTemplate: e.target.value 
-                          })}
+                          onChange={e =>
+                            updateStep(step.stepNumber, {
+                              subjectTemplate: e.target.value,
+                            })
+                          }
                         />
                       </div>
 
@@ -260,9 +307,11 @@ Viele Grüße,
                           placeholder="Email Inhalt mit {{variables}}"
                           rows={6}
                           value={step.bodyTemplate}
-                          onChange={(e) => updateStep(step.stepNumber, { 
-                            bodyTemplate: e.target.value 
-                          })}
+                          onChange={e =>
+                            updateStep(step.stepNumber, {
+                              bodyTemplate: e.target.value,
+                            })
+                          }
                         />
                       </div>
 
@@ -276,8 +325,9 @@ Viele Grüße,
                               const currentSubject = step.subjectTemplate;
                               const currentBody = step.bodyTemplate;
                               updateStep(step.stepNumber, {
-                                subjectTemplate: currentSubject + ' ' + variable.var,
-                                bodyTemplate: currentBody + ' ' + variable.var
+                                subjectTemplate:
+                                  currentSubject + " " + variable.var,
+                                bodyTemplate: currentBody + " " + variable.var,
                               });
                             }}
                           >
@@ -290,8 +340,8 @@ Viele Grüße,
                 ))}
               </div>
 
-              <Button 
-                onClick={createSequence} 
+              <Button
+                onClick={createSequence}
                 disabled={isCreating}
                 className="w-full"
               >
@@ -308,12 +358,16 @@ Viele Grüße,
             <CardContent>
               {sequences.length === 0 ? (
                 <p className="text-muted-foreground text-center py-8">
-                  Keine Sequences vorhanden. Erstellen Sie Ihre erste Sequence oben.
+                  Keine Sequences vorhanden. Erstellen Sie Ihre erste Sequence
+                  oben.
                 </p>
               ) : (
                 <div className="space-y-4">
-                  {sequences.map((sequence) => (
-                    <Card key={sequence.id} className="border-l-4 border-l-green-500">
+                  {sequences.map(sequence => (
+                    <Card
+                      key={sequence.id}
+                      className="border-l-4 border-l-green-500"
+                    >
                       <CardContent className="pt-4">
                         <div className="flex items-center justify-between mb-4">
                           <div>
@@ -334,11 +388,18 @@ Viele Grüße,
                         </div>
 
                         <div className="space-y-2">
-                          {sequence.steps.map((step) => (
-                            <div key={step.stepNumber} className="flex items-center gap-4 text-sm">
-                              <Badge variant="secondary">Step {step.stepNumber}</Badge>
+                          {sequence.steps.map(step => (
+                            <div
+                              key={step.stepNumber}
+                              className="flex items-center gap-4 text-sm"
+                            >
+                              <Badge variant="secondary">
+                                Step {step.stepNumber}
+                              </Badge>
                               <span className="text-muted-foreground">
-                                {step.delayDays === 0 ? 'Sofort' : `+${step.delayDays} Tage`}
+                                {step.delayDays === 0
+                                  ? "Sofort"
+                                  : `+${step.delayDays} Tage`}
                               </span>
                               <span className="font-medium truncate">
                                 {step.subjectTemplate}

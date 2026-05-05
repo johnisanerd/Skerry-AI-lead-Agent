@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ICPBuilder } from "@/components/nexus/ICPBuilder";
+import { useT } from "@/lib/i18n";
 
 export const Route = createFileRoute("/icp")({
   head: () => ({
@@ -7,7 +8,8 @@ export const Route = createFileRoute("/icp")({
       { title: "ICP Builder — Skerry" },
       {
         name: "description",
-        content: "Definieren Sie Ihr ideales Kundenprofil für präzise Lead-Discovery.",
+        content:
+          "Definieren Sie Ihr ideales Kundenprofil für präzise Lead-Discovery.",
       },
     ],
   }),
@@ -15,13 +17,12 @@ export const Route = createFileRoute("/icp")({
 });
 
 function ICPBuilderPage() {
+  const t = useT();
   return (
     <div className="container mx-auto py-6">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold">ICP Builder</h1>
-        <p className="text-muted-foreground mt-2">
-          Definieren Sie Ihr ideales Kundenprofil, damit unser Agent die richtigen Leads finden kann.
-        </p>
+        <h1 className="text-3xl font-bold">{t("icp.title")}</h1>
+        <p className="text-muted-foreground mt-2">{t("icp.subtitle")}</p>
       </div>
       <ICPBuilder />
     </div>

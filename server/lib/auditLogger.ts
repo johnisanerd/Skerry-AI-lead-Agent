@@ -4,7 +4,8 @@
  * Env: SUPABASE_URL
  */
 
-import { admin } from '../supabaseAdmin.js';
+import { admin } from "../supabaseAdmin.js";
+import { logEvent, makeRequestId } from "./logger.js";
 
 export interface AuditLogParams {
   workspaceId: string;
@@ -20,28 +21,40 @@ export interface AuditLogParams {
  */
 export async function logAudit(params: AuditLogParams): Promise<void> {
   if (!admin) {
-    console.warn('Audit logging skipped: Supabase admin client not configured');
+    logEvent("warn", "audit_log_skipped_no_admin", {
+      requestId: makeRequestId(),
+      workspaceId: params.workspaceId,
+      action: params.action,
+    });
     return;
   }
 
   try {
-    const { error } = await admin
-      .from('audit_log')
-      .insert({
-        workspace_id: params.workspaceId,
-        user_id: params.userId || null,
-        action: params.action,
-        resource_type: params.resourceType || null,
-        resource_id: params.resourceId || null,
-        metadata: params.metadata || {},
-        created_at: new Date().toISOString()
-      });
+    const { error } = await admin.from("audit_log").insert({
+      workspace_id: params.workspaceId,
+      user_id: params.userId || null,
+      action: params.action,
+      resource_type: params.resourceType || null,
+      resource_id: params.resourceId || null,
+      metadata: params.metadata || {},
+      created_at: new Date().toISOString(),
+    });
 
     if (error) {
-      console.error('Failed to write audit log:', error);
+      logEvent("error", "audit_log_write_failed", {
+        requestId: makeRequestId(),
+        workspaceId: params.workspaceId,
+        action: params.action,
+        error: String(error),
+      });
     }
   } catch (err) {
-    console.error('Audit logging error:', err);
+    logEvent("error", "audit_log_write_failed", {
+      requestId: makeRequestId(),
+      workspaceId: params.workspaceId,
+      action: params.action,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -53,19 +66,19 @@ export async function logLeadDiscovered(params: {
   workspaceId: string;
   userId?: string;
   count: number;
-  provider: 'apollo' | 'openai';
+  provider: "apollo" | "openai";
   requestId: string;
 }): Promise<void> {
   return logAudit({
     workspaceId: params.workspaceId,
     userId: params.userId,
-    action: 'lead.discovered',
-    resourceType: 'lead',
+    action: "lead.discovered",
+    resourceType: "lead",
     metadata: {
       count: params.count,
       provider: params.provider,
-      requestId: params.requestId
-    }
+      requestId: params.requestId,
+    },
   });
 }
 
@@ -79,14 +92,14 @@ export async function logEmailSent(params: {
   return logAudit({
     workspaceId: params.workspaceId,
     userId: params.userId,
-    action: 'email.sent',
-    resourceType: 'email',
+    action: "email.sent",
+    resourceType: "email",
     resourceId: params.leadId,
     metadata: {
       leadId: params.leadId,
       subject: params.subject,
-      messageId: params.messageId
-    }
+      messageId: params.messageId,
+    },
   });
 }
 
@@ -99,13 +112,13 @@ export async function logEmailFailed(params: {
   return logAudit({
     workspaceId: params.workspaceId,
     userId: params.userId,
-    action: 'email.failed',
-    resourceType: 'email',
+    action: "email.failed",
+    resourceType: "email",
     resourceId: params.leadId,
     metadata: {
       leadId: params.leadId,
-      error: params.error
-    }
+      error: params.error,
+    },
   });
 }
 
@@ -118,13 +131,13 @@ export async function logLeadDeleted(params: {
   return logAudit({
     workspaceId: params.workspaceId,
     userId: params.userId,
-    action: 'lead.deleted',
-    resourceType: 'lead',
+    action: "lead.deleted",
+    resourceType: "lead",
     resourceId: params.leadId,
     metadata: {
       leadId: params.leadId,
-      leadName: params.leadName
-    }
+      leadName: params.leadName,
+    },
   });
 }
 
@@ -138,14 +151,14 @@ export async function logPlanUpgraded(params: {
   return logAudit({
     workspaceId: params.workspaceId,
     userId: params.userId,
-    action: 'plan.upgraded',
-    resourceType: 'workspace',
+    action: "plan.upgraded",
+    resourceType: "workspace",
     resourceId: params.workspaceId,
     metadata: {
       fromPlan: params.fromPlan,
       toPlan: params.toPlan,
-      stripeSubscriptionId: params.stripeSubscriptionId
-    }
+      stripeSubscriptionId: params.stripeSubscriptionId,
+    },
   });
 }
 
@@ -157,12 +170,12 @@ export async function logWorkspaceSettingsChanged(params: {
   return logAudit({
     workspaceId: params.workspaceId,
     userId: params.userId,
-    action: 'workspace.settings_changed',
-    resourceType: 'workspace',
+    action: "workspace.settings_changed",
+    resourceType: "workspace",
     resourceId: params.workspaceId,
     metadata: {
-      changes: params.changes
-    }
+      changes: params.changes,
+    },
   });
 }
 
@@ -176,14 +189,14 @@ export async function logSequenceCreated(params: {
   return logAudit({
     workspaceId: params.workspaceId,
     userId: params.userId,
-    action: 'sequence.created',
-    resourceType: 'sequence',
+    action: "sequence.created",
+    resourceType: "sequence",
     resourceId: params.sequenceId,
     metadata: {
       sequenceId: params.sequenceId,
       sequenceName: params.sequenceName,
-      stepsCount: params.stepsCount
-    }
+      stepsCount: params.stepsCount,
+    },
   });
 }
 
@@ -197,14 +210,14 @@ export async function logLeadEnrolled(params: {
   return logAudit({
     workspaceId: params.workspaceId,
     userId: params.userId,
-    action: 'lead.enrolled',
-    resourceType: 'sequence_enrollment',
+    action: "lead.enrolled",
+    resourceType: "sequence_enrollment",
     resourceId: params.leadId,
     metadata: {
       leadId: params.leadId,
       sequenceId: params.sequenceId,
-      sequenceName: params.sequenceName
-    }
+      sequenceName: params.sequenceName,
+    },
   });
 }
 
@@ -217,12 +230,12 @@ export async function logExportPerformed(params: {
   return logAudit({
     workspaceId: params.workspaceId,
     userId: params.userId,
-    action: 'leads.exported',
-    resourceType: 'export',
+    action: "leads.exported",
+    resourceType: "export",
     metadata: {
       format: params.format,
-      leadCount: params.leadCount
-    }
+      leadCount: params.leadCount,
+    },
   });
 }
 
@@ -238,22 +251,26 @@ export async function getAuditLogs(
 
   try {
     let query = admin
-      .from('audit_log')
-      .select('*')
-      .eq('workspace_id', workspaceId)
-      .order('created_at', { ascending: false })
+      .from("audit_log")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .order("created_at", { ascending: false })
       .limit(limit);
 
     if (actionType) {
-      query = query.eq('action', actionType);
+      query = query.eq("action", actionType);
     }
 
     const { data, error } = await query;
-    
+
     if (error) throw error;
     return data || [];
   } catch (err) {
-    console.error('Failed to fetch audit logs:', err);
+    logEvent("error", "audit_logs_fetch_failed", {
+      requestId: makeRequestId(),
+      workspaceId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [];
   }
 }

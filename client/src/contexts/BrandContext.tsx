@@ -29,7 +29,7 @@ const defaultBrand: BrandSettings = {
   brandLogoUrl: "",
   brandPrimaryColor: "#06b6d4",
   customDomain: "",
-  fromEmail: "Skerry <onboarding@resend.dev>"
+  fromEmail: "Skerry <onboarding@resend.dev>",
 };
 
 const BrandContext = createContext<BrandContextValue | undefined>(undefined);
@@ -53,7 +53,9 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Try to get brand settings from current workspace
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) {
         setBrand(defaultBrand);
         setIsLoading(false);
@@ -61,7 +63,9 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Get current workspace from URL or localStorage
-      const currentWorkspaceId = localStorage.getItem('skerry-workspace-current');
+      const currentWorkspaceId = localStorage.getItem(
+        "skerry-workspace-current"
+      );
       if (!currentWorkspaceId) {
         setBrand(defaultBrand);
         setIsLoading(false);
@@ -70,9 +74,11 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
 
       // Load brand settings from workspace
       const { data: workspace } = await supabase
-        .from('workspaces')
-        .select('brand_name, brand_logo_url, brand_primary_color, custom_domain, from_email')
-        .eq('id', currentWorkspaceId)
+        .from("workspaces")
+        .select(
+          "brand_name, brand_logo_url, brand_primary_color, custom_domain, from_email"
+        )
+        .eq("id", currentWorkspaceId)
         .single();
 
       if (workspace) {
@@ -82,7 +88,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
           brandLogoUrl: workspace.brand_logo_url || "",
           brandPrimaryColor: workspace.brand_primary_color || "#06b6d4",
           customDomain: workspace.custom_domain || "",
-          fromEmail: workspace.from_email || "Skerry <onboarding@resend.dev>"
+          fromEmail: workspace.from_email || "Skerry <onboarding@resend.dev>",
         };
         setBrand(brandSettings);
         applyBrandStylesToDOM(brandSettings);
@@ -91,7 +97,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
         applyBrandStylesToDOM(defaultBrand);
       }
     } catch (err) {
-      console.error('Failed to load brand settings:', err);
+      console.error("Failed to load brand settings:", err);
       setBrand(defaultBrand);
       applyBrandStylesToDOM(defaultBrand);
     } finally {
@@ -104,15 +110,15 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const { error } = await supabase
-        .from('workspaces')
+        .from("workspaces")
         .update({
           brand_name: updates.brandName,
           brand_logo_url: updates.brandLogoUrl,
           brand_primary_color: updates.brandPrimaryColor,
           custom_domain: updates.customDomain,
-          from_email: updates.fromEmail
+          from_email: updates.fromEmail,
         })
-        .eq('id', brand.workspaceId);
+        .eq("id", brand.workspaceId);
 
       if (error) throw error;
 
@@ -120,7 +126,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
       setBrand(updatedBrand);
       applyBrandStylesToDOM(updatedBrand);
     } catch (err) {
-      console.error('Failed to update brand settings:', err);
+      console.error("Failed to update brand settings:", err);
       throw err;
     }
   };
@@ -132,7 +138,9 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <BrandContext.Provider value={{ brand, isLoading, updateBrand, applyBrandStyles }}>
+    <BrandContext.Provider
+      value={{ brand, isLoading, updateBrand, applyBrandStyles }}
+    >
       {children}
     </BrandContext.Provider>
   );
@@ -151,19 +159,21 @@ export function useBrand(): BrandContextValue {
  */
 function applyBrandStylesToDOM(brand: BrandSettings) {
   const root = document.documentElement;
-  
+
   // Set CSS variables
-  root.style.setProperty('--brand-primary', brand.brandPrimaryColor);
-  root.style.setProperty('--brand-name', `"${brand.brandName}"`);
-  
+  root.style.setProperty("--brand-primary", brand.brandPrimaryColor);
+  root.style.setProperty("--brand-name", `"${brand.brandName}"`);
+
   // Update page title
   if (brand.brandName !== "Skerry") {
     document.title = `${brand.brandName} — AI Lead Generation`;
   }
-  
+
   // Update favicon if custom logo is set
   if (brand.brandLogoUrl) {
-    const favicon = document.querySelector('link[rel="icon"]') as HTMLLinkElement;
+    const favicon = document.querySelector(
+      'link[rel="icon"]'
+    ) as HTMLLinkElement;
     if (favicon) {
       favicon.href = brand.brandLogoUrl;
     }
@@ -173,14 +183,16 @@ function applyBrandStylesToDOM(brand: BrandSettings) {
 /**
  * Public function to get brand settings for a workspace (no auth required)
  */
-export async function getPublicBrandSettings(workspaceId: string): Promise<BrandSettings | null> {
+export async function getPublicBrandSettings(
+  workspaceId: string
+): Promise<BrandSettings | null> {
   try {
     if (!supabase) return null;
 
     const { data } = await supabase
-      .from('workspace_brand_settings')
-      .select('*')
-      .eq('workspace_id', workspaceId)
+      .from("workspace_brand_settings")
+      .select("*")
+      .eq("workspace_id", workspaceId)
       .single();
 
     if (data) {
@@ -190,13 +202,13 @@ export async function getPublicBrandSettings(workspaceId: string): Promise<Brand
         brandLogoUrl: data.brand_logo_url || "",
         brandPrimaryColor: data.brand_primary_color || "#06b6d4",
         customDomain: data.custom_domain || "",
-        fromEmail: data.from_email || "Skerry <onboarding@resend.dev>"
+        fromEmail: data.from_email || "Skerry <onboarding@resend.dev>",
       };
     }
 
     return null;
   } catch (err) {
-    console.error('Failed to get public brand settings:', err);
+    console.error("Failed to get public brand settings:", err);
     return null;
   }
 }

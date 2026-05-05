@@ -5,11 +5,11 @@
  */
 
 export interface SequenceStep {
-  stepNumber: number;       // 1, 2, 3
-  delayDays: number;        // 0 = sofort, 3 = nach 3 Tagen
-  subjectTemplate: string;  // z.B. "Quick follow-up, {{first_name}}"
-  bodyTemplate: string;     // Markdown mit {{variables}}
-  condition: 'always' | 'no_reply' | 'no_open';
+  stepNumber: number; // 1, 2, 3
+  delayDays: number; // 0 = sofort, 3 = nach 3 Tagen
+  subjectTemplate: string; // z.B. "Quick follow-up, {{first_name}}"
+  bodyTemplate: string; // Markdown mit {{variables}}
+  condition: "always" | "no_reply" | "no_open";
 }
 
 export interface Sequence {
@@ -24,7 +24,7 @@ export interface LeadSequenceEnrollment {
   leadId: string;
   sequenceId: string;
   currentStep: number;
-  status: 'active' | 'replied' | 'completed' | 'paused';
+  status: "active" | "replied" | "completed" | "paused";
   nextSendAt: Date;
 }
 
@@ -62,11 +62,17 @@ export async function generateEmailFromTemplate(
   };
 
   // Replace variables in templates
-  const replaceVariables = (text: string, vars: Record<string, string>): string => {
+  const replaceVariables = (
+    text: string,
+    vars: Record<string, string>
+  ): string => {
     let result = text;
     for (const [key, value] of Object.entries(vars)) {
       const placeholder = `{{${key}}}`;
-      result = result.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), value);
+      result = result.replace(
+        new RegExp(placeholder.replace(/[{}]/g, "\\$&"), "g"),
+        value
+      );
     }
     return result;
   };
@@ -93,19 +99,22 @@ export function shouldExecuteStep(
   if (enrollment.currentStep !== step.stepNumber) return false;
 
   // Enrollment nicht aktiv?
-  if (enrollment.status !== 'active') return false;
+  if (enrollment.status !== "active") return false;
 
   // Zeit noch nicht erreicht?
   if (new Date() < enrollment.nextSendAt) return false;
 
   // Condition prüfen
   switch (step.condition) {
-    case 'always':
+    case "always":
       return true;
-    case 'no_reply':
-      return !lastEmailEvent || lastEmailEvent.type !== 'replied';
-    case 'no_open':
-      return !lastEmailEvent || (lastEmailEvent.type !== 'opened' && lastEmailEvent.type !== 'replied');
+    case "no_reply":
+      return !lastEmailEvent || lastEmailEvent.type !== "replied";
+    case "no_open":
+      return (
+        !lastEmailEvent ||
+        (lastEmailEvent.type !== "opened" && lastEmailEvent.type !== "replied")
+      );
     default:
       return true;
   }
@@ -131,29 +140,41 @@ export function validateSequenceStep(step: SequenceStep): string[] {
   const errors: string[] = [];
 
   if (step.stepNumber < 1) {
-    errors.push('stepNumber muss >= 1 sein');
+    errors.push("stepNumber muss >= 1 sein");
   }
 
   if (step.delayDays < 0) {
-    errors.push('delayDays darf nicht negativ sein');
+    errors.push("delayDays darf nicht negativ sein");
   }
 
   if (!step.subjectTemplate || step.subjectTemplate.trim().length === 0) {
-    errors.push('subjectTemplate ist erforderlich');
+    errors.push("subjectTemplate ist erforderlich");
   }
 
   if (!step.bodyTemplate || step.bodyTemplate.trim().length === 0) {
-    errors.push('bodyTemplate ist erforderlich');
+    errors.push("bodyTemplate ist erforderlich");
   }
 
-  if (!['always', 'no_reply', 'no_open'].includes(step.condition)) {
+  if (!["always", "no_reply", "no_open"].includes(step.condition)) {
     errors.push('condition muss "always", "no_reply" oder "no_open" sein');
   }
 
   // Prüfe ob Template-Variablen syntaktisch korrekt sind
-  const templateVars = extractTemplateVariables(step.subjectTemplate + ' ' + step.bodyTemplate);
-  const validVars = ['first_name', 'last_name', 'full_name', 'title', 'company', 'business_description', 'sender_name', 'website_context', 'person_context'];
-  
+  const templateVars = extractTemplateVariables(
+    step.subjectTemplate + " " + step.bodyTemplate
+  );
+  const validVars = [
+    "first_name",
+    "last_name",
+    "full_name",
+    "title",
+    "company",
+    "business_description",
+    "sender_name",
+    "website_context",
+    "person_context",
+  ];
+
   for (const templateVar of templateVars) {
     if (!validVars.includes(templateVar)) {
       errors.push(`Unbekannte Template-Variable: {{${templateVar}}}`);
@@ -174,19 +195,19 @@ function extractTemplateVariables(text: string): string[] {
 /**
  * Validiert komplette Sequence
  */
-export function validateSequence(sequence: Omit<Sequence, 'id'>): string[] {
+export function validateSequence(sequence: Omit<Sequence, "id">): string[] {
   const errors: string[] = [];
 
   if (!sequence.name || sequence.name.trim().length === 0) {
-    errors.push('Name ist erforderlich');
+    errors.push("Name ist erforderlich");
   }
 
   if (!sequence.workspaceId || sequence.workspaceId.trim().length === 0) {
-    errors.push('workspaceId ist erforderlich');
+    errors.push("workspaceId ist erforderlich");
   }
 
   if (!sequence.steps || sequence.steps.length === 0) {
-    errors.push('Mindestens ein Step ist erforderlich');
+    errors.push("Mindestens ein Step ist erforderlich");
   }
 
   // Steps prüfen
@@ -194,7 +215,7 @@ export function validateSequence(sequence: Omit<Sequence, 'id'>): string[] {
   for (const step of sequence.steps) {
     const stepErrors = validateSequenceStep(step);
     errors.push(...stepErrors.map(err => `Step ${step.stepNumber}: ${err}`));
-    
+
     if (stepNumbers.has(step.stepNumber)) {
       errors.push(`Doppelte stepNumber: ${step.stepNumber}`);
     }

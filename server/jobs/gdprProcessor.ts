@@ -5,7 +5,8 @@
  * Env: SUPABASE_URL
  */
 
-import { processDeletionRequests } from '../pipeline/gdprService.js';
+import { processDeletionRequests } from "../pipeline/gdprService.js";
+import { logEvent, makeRequestId } from "../lib/logger.js";
 
 /**
  * Startet den GDPR Processor als täglichen Background Job
@@ -13,33 +14,50 @@ import { processDeletionRequests } from '../pipeline/gdprService.js';
 export function startGdprProcessor(): void {
   // Alle 24 Stunden ausführen (86400000 ms)
   const interval = 24 * 60 * 60 * 1000;
-  
-  console.log('🔒 GDPR Processor started - runs every 24 hours');
-  
+
+  logEvent("info", "gdpr_processor_started", {
+    requestId: makeRequestId(),
+    interval,
+  });
+
   setInterval(async () => {
     try {
-      console.log('🔒 Processing GDPR deletion requests...');
-      
+      const requestId = makeRequestId();
+      logEvent("info", "gdpr_processor_cycle_started", { requestId });
+
       const result = await processDeletionRequests();
-      
+
       if (result.processed > 0 || result.failed > 0) {
-        console.log(`🔒 GDPR Processing completed: ${result.processed} processed, ${result.failed} failed`);
+        logEvent("info", "gdpr_processor_cycle_completed", {
+          requestId,
+          ...result,
+        });
       }
     } catch (err) {
-      console.error('🔒 GDPR Processor cycle failed:', err);
+      logEvent("error", "gdpr_processor_cycle_failed", {
+        requestId: makeRequestId(),
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }, interval);
 
   // Sofort beim Start ausführen (für verpasste Verarbeitung)
   setTimeout(async () => {
     try {
-      console.log('🔒 Running initial GDPR processing...');
+      const requestId = makeRequestId();
+      logEvent("info", "gdpr_processor_initial_started", { requestId });
       const result = await processDeletionRequests();
       if (result.processed > 0 || result.failed > 0) {
-        console.log(`🔒 Initial GDPR processing: ${result.processed} processed, ${result.failed} failed`);
+        logEvent("info", "gdpr_processor_initial_completed", {
+          requestId,
+          ...result,
+        });
       }
     } catch (err) {
-      console.error('🔒 Initial GDPR processing failed:', err);
+      logEvent("error", "gdpr_processor_initial_failed", {
+        requestId: makeRequestId(),
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }, 5000); // 5 Sekunden nach Server-Start
 }

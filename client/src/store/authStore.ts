@@ -6,7 +6,11 @@ import {
   authSession,
   type AuthUser,
 } from "@/lib/skerryApi";
-import { authLoginLocal, authLogoutLocal, authSessionLocal } from "@/lib/skerryApiLocal";
+import {
+  authLoginLocal,
+  authLogoutLocal,
+  authSessionLocal,
+} from "@/lib/skerryApiLocal";
 
 export type UserRole = "user" | "developer";
 
@@ -34,10 +38,13 @@ export const useAuthStore = create<AuthStore>()(
           const response = await authLogin(email, password);
           if (!response.ok || !response.user) {
             // Fallback to local auth if server fails
-            console.log('Server auth failed, trying local fallback...');
+            console.log("Server auth failed, trying local fallback...");
             const localResponse = await authLoginLocal(email, password);
             if (!localResponse.ok || !localResponse.user) {
-              return { success: false, error: localResponse.error ?? "Login failed." };
+              return {
+                success: false,
+                error: localResponse.error ?? "Login failed.",
+              };
             }
             set({ isAuthenticated: true, user: localResponse.user });
             return { success: true };
@@ -46,16 +53,22 @@ export const useAuthStore = create<AuthStore>()(
           return { success: true };
         } catch (error) {
           // If network error, try local auth
-          console.log('Network error, trying local auth...');
+          console.log("Network error, trying local auth...");
           try {
             const localResponse = await authLoginLocal(email, password);
             if (!localResponse.ok || !localResponse.user) {
-              return { success: false, error: localResponse.error ?? "Login failed." };
+              return {
+                success: false,
+                error: localResponse.error ?? "Login failed.",
+              };
             }
             set({ isAuthenticated: true, user: localResponse.user });
             return { success: true };
           } catch (localError) {
-            return { success: false, error: "Network error and local auth failed." };
+            return {
+              success: false,
+              error: "Network error and local auth failed.",
+            };
           }
         }
       },

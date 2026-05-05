@@ -4,12 +4,12 @@
  * Env: APOLLO_API_KEY, OPENAI_API_KEY
  */
 
-import { searchApollo } from './apolloDiscover.js';
+import { searchApollo } from "./apolloDiscover.js";
 
 export interface DiscoveryParams {
   icp: {
-    roles: string[];           // z.B. ["VP of Growth", "Head of Marketing"]
-    locations?: string[];      // z.B. ["Germany", "DACH"]
+    roles: string[]; // z.B. ["VP of Growth", "Head of Marketing"]
+    locations?: string[]; // z.B. ["Germany", "DACH"]
     companySizeRange?: string; // z.B. "51,500"
   };
   limit: number;
@@ -18,7 +18,7 @@ export interface DiscoveryParams {
 
 export interface DiscoveryResult {
   leads: GeneratedLead[];
-  source: 'apollo' | 'openai';
+  source: "apollo" | "openai";
   provider_note?: string;
 }
 
@@ -30,10 +30,12 @@ export interface GeneratedLead {
   linkedin: string | null;
   organization: { name: string; website: string | null };
   location: string | null;
-  source: 'apollo' | 'openai';
+  source: "apollo" | "openai";
 }
 
-export async function discoverLeads(params: DiscoveryParams): Promise<DiscoveryResult> {
+export async function discoverLeads(
+  params: DiscoveryParams
+): Promise<DiscoveryResult> {
   // Provider 1: Apollo (bevorzugt — legal, strukturiert, kostenlos)
   if (process.env.APOLLO_API_KEY) {
     const raw = await searchApollo({
@@ -53,10 +55,10 @@ export async function discoverLeads(params: DiscoveryParams): Promise<DiscoveryR
         email: l.email,
         linkedin: l.linkedinUrl,
         organization: { name: l.companyName, website: l.companyWebsite },
-        location: [l.city, l.country].filter(Boolean).join(', ') || null,
-        source: 'apollo',
+        location: [l.city, l.country].filter(Boolean).join(", ") || null,
+        source: "apollo",
       })),
-      source: 'apollo',
+      source: "apollo",
     };
   }
 
@@ -64,9 +66,9 @@ export async function discoverLeads(params: DiscoveryParams): Promise<DiscoveryR
   if (process.env.OPENAI_API_KEY) {
     // Ruft die bereits existierende generateLeadsWithOpenAI()-Funktion auf
     // Gibt source: 'openai' zurück
-    throw new Error('OPENAI_FALLBACK'); // Signal an server/index.ts die OpenAI-Route zu nehmen
+    throw new Error("OPENAI_FALLBACK"); // Signal an server/index.ts die OpenAI-Route zu nehmen
   }
 
   // Kein Provider konfiguriert
-  throw new Error('NO_DISCOVERY_PROVIDER');
+  throw new Error("NO_DISCOVERY_PROVIDER");
 }

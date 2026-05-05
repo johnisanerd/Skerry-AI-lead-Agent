@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Download, FileSpreadsheet, Database, Users } from "lucide-react";
 import { toast } from "sonner";
@@ -11,37 +16,39 @@ interface ExportButtonProps {
   workspaceId: string;
 }
 
-export function ExportButton({ 
-  selectedLeadIds = [], 
-  totalLeads = 0, 
-  workspaceId 
+export function ExportButton({
+  selectedLeadIds = [],
+  totalLeads = 0,
+  workspaceId,
 }: ExportButtonProps) {
   const [isExporting, setIsExporting] = useState<string | null>(null);
 
-  const handleExport = async (format: 'csv' | 'hubspot' | 'salesforce') => {
+  const handleExport = async (format: "csv" | "hubspot" | "salesforce") => {
     setIsExporting(format);
-    
+
     try {
       // Build URL with parameters
       const params = new URLSearchParams({
         format,
         workspaceId,
-        ...(selectedLeadIds.length > 0 && { leadIds: selectedLeadIds.join(',') })
+        ...(selectedLeadIds.length > 0 && {
+          leadIds: selectedLeadIds.join(","),
+        }),
       });
 
       const response = await fetch(`/api/leads/export?${params}`, {
-        credentials: 'include'
+        credentials: "include",
       });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Export failed');
+        throw new Error(error.error || "Export failed");
       }
 
       // Get filename from headers or create default
-      const contentDisposition = response.headers.get('content-disposition');
-      let filename = `skerry-leads-${format}-${new Date().toISOString().split('T')[0]}.${format === 'hubspot' ? 'json' : 'csv'}`;
-      
+      const contentDisposition = response.headers.get("content-disposition");
+      let filename = `skerry-leads-${format}-${new Date().toISOString().split("T")[0]}.${format === "hubspot" ? "json" : "csv"}`;
+
       if (contentDisposition) {
         const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
         if (filenameMatch) {
@@ -52,8 +59,8 @@ export function ExportButton({
       // Download file
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
+      const a = document.createElement("a");
+      a.style.display = "none";
       a.href = url;
       a.download = filename;
       document.body.appendChild(a);
@@ -62,10 +69,11 @@ export function ExportButton({
       document.body.removeChild(a);
 
       const exportedCount = selectedLeadIds.length || totalLeads;
-      toast.success(`${exportedCount} Leads als ${format.toUpperCase()} exportiert`);
-
+      toast.success(
+        `${exportedCount} Leads als ${format.toUpperCase()} exportiert`
+      );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Export fehlgeschlagen');
+      toast.error(err instanceof Error ? err.message : "Export fehlgeschlagen");
     } finally {
       setIsExporting(null);
     }
@@ -73,26 +81,26 @@ export function ExportButton({
 
   const exportOptions = [
     {
-      id: 'csv',
-      label: 'CSV Export',
-      description: 'Excel-kompatibel',
+      id: "csv",
+      label: "CSV Export",
+      description: "Excel-kompatibel",
       icon: FileSpreadsheet,
-      color: 'text-green-600'
+      color: "text-green-600",
     },
     {
-      id: 'hubspot',
-      label: 'HubSpot Import',
-      description: 'JSON Format',
+      id: "hubspot",
+      label: "HubSpot Import",
+      description: "JSON Format",
       icon: Database,
-      color: 'text-orange-600'
+      color: "text-orange-600",
     },
     {
-      id: 'salesforce',
-      label: 'Salesforce Import',
-      description: 'Custom Fields',
+      id: "salesforce",
+      label: "Salesforce Import",
+      description: "Custom Fields",
       icon: Users,
-      color: 'text-blue-600'
-    }
+      color: "text-blue-600",
+    },
   ];
 
   const selectedCount = selectedLeadIds.length;
@@ -112,10 +120,10 @@ export function ExportButton({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        {exportOptions.map((option) => {
+        {exportOptions.map(option => {
           const Icon = option.icon;
           const isLoading = isExporting === option.id;
-          
+
           return (
             <DropdownMenuItem
               key={option.id}

@@ -3,7 +3,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Trophy, TrendingUp, Users, Mail, MousePointer, MessageSquare } from "lucide-react";
+import {
+  Trophy,
+  TrendingUp,
+  Users,
+  Mail,
+  MousePointer,
+  MessageSquare,
+} from "lucide-react";
 import { toast } from "sonner";
 
 interface ABTestResult {
@@ -40,18 +47,19 @@ export function ABTestResults({ abTestId, workspaceId }: ABTestResultsProps) {
 
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/ab-tests/${abTestId}/results`, { 
-        credentials: 'include' 
+      const res = await fetch(`/api/ab-tests/${abTestId}/results`, {
+        credentials: "include",
+        headers: { "x-workspace-id": workspaceId },
       });
       const data = await res.json();
-      
+
       if (data.ok) {
         setResults(data.results || []);
         setHasEnoughData(data.hasEnoughData || false);
         setWinnerVariantId(data.winnerVariantId || null);
       }
     } catch (err) {
-      toast.error('Fehler beim Laden der A/B Test Ergebnisse');
+      toast.error("Fehler beim Laden der A/B Test Ergebnisse");
     } finally {
       setIsLoading(false);
     }
@@ -62,26 +70,34 @@ export function ABTestResults({ abTestId, workspaceId }: ABTestResultsProps) {
 
     try {
       const res = await fetch(`/api/ab-tests/${abTestId}/promote`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ winnerVariantId })
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-workspace-id": workspaceId,
+        },
+        credentials: "include",
+        body: JSON.stringify({ winnerVariantId }),
       });
 
       const data = await res.json();
       if (data.ok) {
-        toast.success('Gewinner-Variante wurde promoted');
+        toast.success("Gewinner-Variante wurde promoted");
         loadResults();
       } else {
-        toast.error(data.error || 'Fehler beim Promoten');
+        toast.error(data.error || "Fehler beim Promoten");
       }
     } catch (err) {
-      toast.error('Verbindung zum Server fehlgeschlagen');
+      toast.error("Verbindung zum Server fehlgeschlagen");
     }
   };
 
   const getVariantColor = (index: number) => {
-    const colors = ['bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-orange-500'];
+    const colors = [
+      "bg-blue-500",
+      "bg-green-500",
+      "bg-purple-500",
+      "bg-orange-500",
+    ];
     return colors[index % colors.length];
   };
 
@@ -141,7 +157,9 @@ export function ABTestResults({ abTestId, workspaceId }: ABTestResultsProps) {
               <div key={result.variantId} className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${getVariantColor(index)}`}></div>
+                    <div
+                      className={`w-3 h-3 rounded-full ${getVariantColor(index)}`}
+                    ></div>
                     <h4 className="font-medium">Variante {index + 1}</h4>
                     {result.variantId === winnerVariantId && (
                       <Badge variant="default" className="bg-yellow-500">
@@ -151,8 +169,12 @@ export function ABTestResults({ abTestId, workspaceId }: ABTestResultsProps) {
                     )}
                   </div>
                   <div className="text-right">
-                    <div className="text-2xl font-bold">{result.intentScore.toFixed(1)}</div>
-                    <div className="text-sm text-muted-foreground">Intent Score</div>
+                    <div className="text-2xl font-bold">
+                      {result.intentScore.toFixed(1)}
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      Intent Score
+                    </div>
                   </div>
                 </div>
 
@@ -162,8 +184,8 @@ export function ABTestResults({ abTestId, workspaceId }: ABTestResultsProps) {
                     <span>Intent Score</span>
                     <span>{result.intentScore.toFixed(1)}%</span>
                   </div>
-                  <Progress 
-                    value={(result.intentScore / maxScore) * 100} 
+                  <Progress
+                    value={(result.intentScore / maxScore) * 100}
                     className="h-2"
                   />
                 </div>
@@ -182,27 +204,34 @@ export function ABTestResults({ abTestId, workspaceId }: ABTestResultsProps) {
                       <Users className="w-4 h-4" />
                       <span className="text-xs">Opens</span>
                     </div>
-                    <div className="font-semibold">{result.openRate.toFixed(1)}%</div>
+                    <div className="font-semibold">
+                      {result.openRate.toFixed(1)}%
+                    </div>
                   </div>
                   <div className="text-center">
                     <div className="flex items-center justify-center gap-1 text-muted-foreground mb-1">
                       <MousePointer className="w-4 h-4" />
                       <span className="text-xs">Clicks</span>
                     </div>
-                    <div className="font-semibold">{result.clickRate.toFixed(1)}%</div>
+                    <div className="font-semibold">
+                      {result.clickRate.toFixed(1)}%
+                    </div>
                   </div>
                   <div className="text-center">
                     <div className="flex items-center justify-center gap-1 text-muted-foreground mb-1">
                       <MessageSquare className="w-4 h-4" />
                       <span className="text-xs">Replies</span>
                     </div>
-                    <div className="font-semibold">{result.replyRate.toFixed(1)}%</div>
+                    <div className="font-semibold">
+                      {result.replyRate.toFixed(1)}%
+                    </div>
                   </div>
                 </div>
 
                 {/* Raw Numbers */}
                 <div className="text-sm text-muted-foreground">
-                  {result.opens} von {result.sends} geöffnet • {result.clicks} geklickt • {result.replies} geantwortet
+                  {result.opens} von {result.sends} geöffnet • {result.clicks}{" "}
+                  geklickt • {result.replies} geantwortet
                 </div>
               </div>
             ))}
@@ -214,10 +243,14 @@ export function ABTestResults({ abTestId, workspaceId }: ABTestResultsProps) {
                   <div>
                     <h4 className="font-medium">Test abschließen?</h4>
                     <p className="text-sm text-muted-foreground">
-                      Mit {results.reduce((sum, r) => sum + r.sends, 0)} Sends haben wir aussagekräftige Daten.
+                      Mit {results.reduce((sum, r) => sum + r.sends, 0)} Sends
+                      haben wir aussagekräftige Daten.
                     </p>
                   </div>
-                  <Button onClick={promoteWinner} className="bg-yellow-500 hover:bg-yellow-600">
+                  <Button
+                    onClick={promoteWinner}
+                    className="bg-yellow-500 hover:bg-yellow-600"
+                  >
                     <Trophy className="w-4 h-4 mr-2" />
                     Gewinner promoten
                   </Button>
@@ -234,7 +267,8 @@ export function ABTestResults({ abTestId, workspaceId }: ABTestResultsProps) {
                     Benötigen mindestens 50 Sends gesamt.
                   </p>
                   <p className="text-xs mt-1">
-                    Aktuell: {results.reduce((sum, r) => sum + r.sends, 0)} Sends
+                    Aktuell: {results.reduce((sum, r) => sum + r.sends, 0)}{" "}
+                    Sends
                   </p>
                 </div>
               </div>

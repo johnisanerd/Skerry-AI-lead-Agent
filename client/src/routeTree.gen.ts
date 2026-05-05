@@ -8,244 +8,388 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root'
-import { Route as WorkspaceRouteImport } from './routes/workspace'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as SequencesRouteImport } from './routes/sequences'
-import { Route as InsightRouteImport } from './routes/insight'
-import { Route as IcpRouteImport } from './routes/icp'
-import { Route as ForgeRouteImport } from './routes/forge'
-import { Route as BillingRouteImport } from './routes/billing'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as SettingsBrandingRouteImport } from './routes/settings/branding'
-import { Route as SettingsAuditRouteImport } from './routes/settings/audit'
+import { Route as rootRouteImport } from "./routes/__root";
+import { Route as WorkspaceRouteImport } from "./routes/workspace";
+import { Route as SettingsRouteImport } from "./routes/settings";
+import { Route as SequencesRouteImport } from "./routes/sequences";
+import { Route as InsightRouteImport } from "./routes/insight";
+import { Route as IcpRouteImport } from "./routes/icp";
+import { Route as ForgeRouteImport } from "./routes/forge";
+import { Route as BillingRouteImport } from "./routes/billing";
+import { Route as IndexRouteImport } from "./routes/index";
+import { Route as SettingsBrandingRouteImport } from "./routes/settings/branding";
+import { Route as SettingsAuditRouteImport } from "./routes/settings/audit";
+import { Route as WorkspacesRouteImport } from "./routes/workspaces";
+import { Route as ReviewRouteImport } from "./routes/review";
+import { Route as LeadSourcesRouteImport } from "./routes/lead-sources";
+import { Route as DeduplicationRouteImport } from "./routes/deduplication";
+import { Route as AssetLibraryRouteImport } from "./routes/asset-library";
+import { Route as FeedbackRouteImport } from "./routes/feedback";
+import { Route as AnalyticsRouteImport } from "./routes/analytics";
+import { Route as AuthRouteImport } from "./routes/auth";
 
 const WorkspaceRoute = WorkspaceRouteImport.update({
-  id: '/workspace',
-  path: '/workspace',
+  id: "/workspace",
+  path: "/workspace",
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+  id: "/settings",
+  path: "/settings",
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const SequencesRoute = SequencesRouteImport.update({
-  id: '/sequences',
-  path: '/sequences',
+  id: "/sequences",
+  path: "/sequences",
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const InsightRoute = InsightRouteImport.update({
-  id: '/insight',
-  path: '/insight',
+  id: "/insight",
+  path: "/insight",
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const IcpRoute = IcpRouteImport.update({
-  id: '/icp',
-  path: '/icp',
+  id: "/icp",
+  path: "/icp",
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const ForgeRoute = ForgeRouteImport.update({
-  id: '/forge',
-  path: '/forge',
+  id: "/forge",
+  path: "/forge",
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const BillingRoute = BillingRouteImport.update({
-  id: '/billing',
-  path: '/billing',
+  id: "/billing",
+  path: "/billing",
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+  id: "/",
+  path: "/",
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any);
 const SettingsBrandingRoute = SettingsBrandingRouteImport.update({
-  id: '/branding',
-  path: '/branding',
+  id: "/branding",
+  path: "/branding",
   getParentRoute: () => SettingsRoute,
-} as any)
+} as any);
 const SettingsAuditRoute = SettingsAuditRouteImport.update({
-  id: '/audit',
-  path: '/audit',
+  id: "/audit",
+  path: "/audit",
   getParentRoute: () => SettingsRoute,
-} as any)
+} as any);
+const WorkspacesRoute = WorkspacesRouteImport.update({
+  id: "/workspaces",
+  path: "/workspaces",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const ReviewRoute = ReviewRouteImport.update({
+  id: "/review",
+  path: "/review",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const LeadSourcesRoute = LeadSourcesRouteImport.update({
+  id: "/lead-sources",
+  path: "/lead-sources",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const DeduplicationRoute = DeduplicationRouteImport.update({
+  id: "/deduplication",
+  path: "/deduplication",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const AssetLibraryRoute = AssetLibraryRouteImport.update({
+  id: "/asset-library",
+  path: "/asset-library",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const FeedbackRoute = FeedbackRouteImport.update({
+  id: "/feedback",
+  path: "/feedback",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const AnalyticsRoute = AnalyticsRouteImport.update({
+  id: "/analytics",
+  path: "/analytics",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const AuthRoute = AuthRouteImport.update({
+  id: "/auth",
+  path: "/auth",
+  getParentRoute: () => rootRouteImport,
+} as any);
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/billing': typeof BillingRoute
-  '/forge': typeof ForgeRoute
-  '/icp': typeof IcpRoute
-  '/insight': typeof InsightRoute
-  '/sequences': typeof SequencesRoute
-  '/settings': typeof SettingsRouteWithChildren
-  '/workspace': typeof WorkspaceRoute
-  '/settings/audit': typeof SettingsAuditRoute
-  '/settings/branding': typeof SettingsBrandingRoute
+  "/": typeof IndexRoute;
+  "/billing": typeof BillingRoute;
+  "/forge": typeof ForgeRoute;
+  "/icp": typeof IcpRoute;
+  "/insight": typeof InsightRoute;
+  "/sequences": typeof SequencesRoute;
+  "/settings": typeof SettingsRouteWithChildren;
+  "/workspace": typeof WorkspaceRoute;
+  "/settings/audit": typeof SettingsAuditRoute;
+  "/settings/branding": typeof SettingsBrandingRoute;
+  "/workspaces": typeof WorkspacesRoute;
+  "/review": typeof ReviewRoute;
+  "/lead-sources": typeof LeadSourcesRoute;
+  "/deduplication": typeof DeduplicationRoute;
+  "/asset-library": typeof AssetLibraryRoute;
+  "/feedback": typeof FeedbackRoute;
+  "/analytics": typeof AnalyticsRoute;
+  "/auth": typeof AuthRoute;
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/billing': typeof BillingRoute
-  '/forge': typeof ForgeRoute
-  '/icp': typeof IcpRoute
-  '/insight': typeof InsightRoute
-  '/sequences': typeof SequencesRoute
-  '/settings': typeof SettingsRouteWithChildren
-  '/workspace': typeof WorkspaceRoute
-  '/settings/audit': typeof SettingsAuditRoute
-  '/settings/branding': typeof SettingsBrandingRoute
+  "/": typeof IndexRoute;
+  "/billing": typeof BillingRoute;
+  "/forge": typeof ForgeRoute;
+  "/icp": typeof IcpRoute;
+  "/insight": typeof InsightRoute;
+  "/sequences": typeof SequencesRoute;
+  "/settings": typeof SettingsRouteWithChildren;
+  "/workspace": typeof WorkspaceRoute;
+  "/settings/audit": typeof SettingsAuditRoute;
+  "/settings/branding": typeof SettingsBrandingRoute;
+  "/workspaces": typeof WorkspacesRoute;
+  "/review": typeof ReviewRoute;
+  "/lead-sources": typeof LeadSourcesRoute;
+  "/deduplication": typeof DeduplicationRoute;
+  "/asset-library": typeof AssetLibraryRoute;
+  "/feedback": typeof FeedbackRoute;
+  "/analytics": typeof AnalyticsRoute;
+  "/auth": typeof AuthRoute;
 }
 export interface FileRoutesById {
-  __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/billing': typeof BillingRoute
-  '/forge': typeof ForgeRoute
-  '/icp': typeof IcpRoute
-  '/insight': typeof InsightRoute
-  '/sequences': typeof SequencesRoute
-  '/settings': typeof SettingsRouteWithChildren
-  '/workspace': typeof WorkspaceRoute
-  '/settings/audit': typeof SettingsAuditRoute
-  '/settings/branding': typeof SettingsBrandingRoute
+  __root__: typeof rootRouteImport;
+  "/": typeof IndexRoute;
+  "/billing": typeof BillingRoute;
+  "/forge": typeof ForgeRoute;
+  "/icp": typeof IcpRoute;
+  "/insight": typeof InsightRoute;
+  "/sequences": typeof SequencesRoute;
+  "/settings": typeof SettingsRouteWithChildren;
+  "/workspace": typeof WorkspaceRoute;
+  "/settings/audit": typeof SettingsAuditRoute;
+  "/settings/branding": typeof SettingsBrandingRoute;
 }
 export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath
+  fileRoutesByFullPath: FileRoutesByFullPath;
   fullPaths:
-    | '/'
-    | '/billing'
-    | '/forge'
-    | '/icp'
-    | '/insight'
-    | '/sequences'
-    | '/settings'
-    | '/workspace'
-    | '/settings/audit'
-    | '/settings/branding'
-  fileRoutesByTo: FileRoutesByTo
+    | "/"
+    | "/billing"
+    | "/forge"
+    | "/icp"
+    | "/insight"
+    | "/sequences"
+    | "/settings"
+    | "/workspace"
+    | "/settings/audit"
+    | "/settings/branding"
+    | "/workspaces"
+    | "/review"
+    | "/lead-sources"
+    | "/deduplication"
+    | "/asset-library"
+    | "/feedback"
+    | "/analytics"
+    | "/auth";
+  fileRoutesByTo: FileRoutesByTo;
   to:
-    | '/'
-    | '/billing'
-    | '/forge'
-    | '/icp'
-    | '/insight'
-    | '/sequences'
-    | '/settings'
-    | '/workspace'
-    | '/settings/audit'
-    | '/settings/branding'
+    | "/"
+    | "/billing"
+    | "/forge"
+    | "/icp"
+    | "/insight"
+    | "/sequences"
+    | "/settings"
+    | "/workspace"
+    | "/settings/audit"
+    | "/settings/branding"
+    | "/workspaces"
+    | "/review"
+    | "/lead-sources"
+    | "/deduplication"
+    | "/asset-library"
+    | "/feedback"
+    | "/analytics"
+    | "/auth";
   id:
-    | '__root__'
-    | '/'
-    | '/billing'
-    | '/forge'
-    | '/icp'
-    | '/insight'
-    | '/sequences'
-    | '/settings'
-    | '/workspace'
-    | '/settings/audit'
-    | '/settings/branding'
-  fileRoutesById: FileRoutesById
+    | "__root__"
+    | "/"
+    | "/billing"
+    | "/forge"
+    | "/icp"
+    | "/insight"
+    | "/sequences"
+    | "/settings"
+    | "/workspace"
+    | "/settings/audit"
+    | "/settings/branding";
+  fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  BillingRoute: typeof BillingRoute
-  ForgeRoute: typeof ForgeRoute
-  IcpRoute: typeof IcpRoute
-  InsightRoute: typeof InsightRoute
-  SequencesRoute: typeof SequencesRoute
-  SettingsRoute: typeof SettingsRouteWithChildren
-  WorkspaceRoute: typeof WorkspaceRoute
+  IndexRoute: typeof IndexRoute;
+  BillingRoute: typeof BillingRoute;
+  ForgeRoute: typeof ForgeRoute;
+  IcpRoute: typeof IcpRoute;
+  InsightRoute: typeof InsightRoute;
+  SequencesRoute: typeof SequencesRoute;
+  SettingsRoute: typeof SettingsRouteWithChildren;
+  WorkspaceRoute: typeof WorkspaceRoute;
+  WorkspacesRoute: typeof WorkspacesRoute;
+  ReviewRoute: typeof ReviewRoute;
+  LeadSourcesRoute: typeof LeadSourcesRoute;
+  DeduplicationRoute: typeof DeduplicationRoute;
+  AssetLibraryRoute: typeof AssetLibraryRoute;
+  FeedbackRoute: typeof FeedbackRoute;
+  AnalyticsRoute: typeof AnalyticsRoute;
+  AuthRoute: typeof AuthRoute;
 }
 
-declare module '@tanstack/react-router' {
+declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
-    '/workspace': {
-      id: '/workspace'
-      path: '/workspace'
-      fullPath: '/workspace'
-      preLoaderRoute: typeof WorkspaceRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sequences': {
-      id: '/sequences'
-      path: '/sequences'
-      fullPath: '/sequences'
-      preLoaderRoute: typeof SequencesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/insight': {
-      id: '/insight'
-      path: '/insight'
-      fullPath: '/insight'
-      preLoaderRoute: typeof InsightRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/icp': {
-      id: '/icp'
-      path: '/icp'
-      fullPath: '/icp'
-      preLoaderRoute: typeof IcpRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/forge': {
-      id: '/forge'
-      path: '/forge'
-      fullPath: '/forge'
-      preLoaderRoute: typeof ForgeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/billing': {
-      id: '/billing'
-      path: '/billing'
-      fullPath: '/billing'
-      preLoaderRoute: typeof BillingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings/branding': {
-      id: '/settings/branding'
-      path: '/branding'
-      fullPath: '/settings/branding'
-      preLoaderRoute: typeof SettingsBrandingRouteImport
-      parentRoute: typeof SettingsRoute
-    }
-    '/settings/audit': {
-      id: '/settings/audit'
-      path: '/audit'
-      fullPath: '/settings/audit'
-      preLoaderRoute: typeof SettingsAuditRouteImport
-      parentRoute: typeof SettingsRoute
-    }
+    "/workspace": {
+      id: "/workspace";
+      path: "/workspace";
+      fullPath: "/workspace";
+      preLoaderRoute: typeof WorkspaceRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/settings": {
+      id: "/settings";
+      path: "/settings";
+      fullPath: "/settings";
+      preLoaderRoute: typeof SettingsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/sequences": {
+      id: "/sequences";
+      path: "/sequences";
+      fullPath: "/sequences";
+      preLoaderRoute: typeof SequencesRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/insight": {
+      id: "/insight";
+      path: "/insight";
+      fullPath: "/insight";
+      preLoaderRoute: typeof InsightRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/icp": {
+      id: "/icp";
+      path: "/icp";
+      fullPath: "/icp";
+      preLoaderRoute: typeof IcpRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/forge": {
+      id: "/forge";
+      path: "/forge";
+      fullPath: "/forge";
+      preLoaderRoute: typeof ForgeRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/billing": {
+      id: "/billing";
+      path: "/billing";
+      fullPath: "/billing";
+      preLoaderRoute: typeof BillingRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/": {
+      id: "/";
+      path: "/";
+      fullPath: "/";
+      preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/settings/branding": {
+      id: "/settings/branding";
+      path: "/branding";
+      fullPath: "/settings/branding";
+      preLoaderRoute: typeof SettingsBrandingRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/audit": {
+      id: "/settings/audit";
+      path: "/audit";
+      fullPath: "/settings/audit";
+      preLoaderRoute: typeof SettingsAuditRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/workspaces": {
+      id: "/workspaces";
+      path: "/workspaces";
+      fullPath: "/workspaces";
+      preLoaderRoute: typeof WorkspacesRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/review": {
+      id: "/review";
+      path: "/review";
+      fullPath: "/review";
+      preLoaderRoute: typeof ReviewRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/lead-sources": {
+      id: "/lead-sources";
+      path: "/lead-sources";
+      fullPath: "/lead-sources";
+      preLoaderRoute: typeof LeadSourcesRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/deduplication": {
+      id: "/deduplication";
+      path: "/deduplication";
+      fullPath: "/deduplication";
+      preLoaderRoute: typeof DeduplicationRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/asset-library": {
+      id: "/asset-library";
+      path: "/asset-library";
+      fullPath: "/asset-library";
+      preLoaderRoute: typeof AssetLibraryRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/feedback": {
+      id: "/feedback";
+      path: "/feedback";
+      fullPath: "/feedback";
+      preLoaderRoute: typeof FeedbackRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/analytics": {
+      id: "/analytics";
+      path: "/analytics";
+      fullPath: "/analytics";
+      preLoaderRoute: typeof AnalyticsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/auth": {
+      id: "/auth";
+      path: "/auth";
+      fullPath: "/auth";
+      preLoaderRoute: typeof AuthRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
   }
 }
 
 interface SettingsRouteChildren {
-  SettingsAuditRoute: typeof SettingsAuditRoute
-  SettingsBrandingRoute: typeof SettingsBrandingRoute
+  SettingsAuditRoute: typeof SettingsAuditRoute;
+  SettingsBrandingRoute: typeof SettingsBrandingRoute;
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAuditRoute: SettingsAuditRoute,
   SettingsBrandingRoute: SettingsBrandingRoute,
-}
+};
 
 const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
-  SettingsRouteChildren,
-)
+  SettingsRouteChildren
+);
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -256,7 +400,15 @@ const rootRouteChildren: RootRouteChildren = {
   SequencesRoute: SequencesRoute,
   SettingsRoute: SettingsRouteWithChildren,
   WorkspaceRoute: WorkspaceRoute,
-}
+  WorkspacesRoute: WorkspacesRoute,
+  ReviewRoute: ReviewRoute,
+  LeadSourcesRoute: LeadSourcesRoute,
+  DeduplicationRoute: DeduplicationRoute,
+  AssetLibraryRoute: AssetLibraryRoute,
+  FeedbackRoute: FeedbackRoute,
+  AnalyticsRoute: AnalyticsRoute,
+  AuthRoute: AuthRoute,
+};
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
-  ._addFileTypes<FileRouteTypes>()
+  ._addFileTypes<FileRouteTypes>();

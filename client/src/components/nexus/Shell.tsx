@@ -75,7 +75,7 @@ export function Shell() {
   const tierColors: Record<string, string> = {
     solo: "border-slate-500/30 text-slate-400 bg-slate-500/5",
     team: "border-blue-500/30 text-blue-400 bg-blue-500/5",
-    agency: "border-cyan-500/30 text-cyan-400 bg-cyan-500/5",
+    agency: "border-purple-500/30 text-purple-400 bg-purple-500/5",
   };
 
   const initials = user?.name
@@ -117,10 +117,10 @@ export function Shell() {
 
               <button
                 onClick={() => setShowFindLeads(true)}
-                className="flex items-center gap-2 rounded-md bg-gradient-to-r from-blue-500 to-cyan-400 px-3.5 py-1.5 text-xs font-semibold text-[#03101a] shadow-[0_0_30px_-8px_oklch(0.78_0.18_220_/_0.8)] transition hover:scale-[1.02] active:scale-[0.98]"
+                className="flex items-center gap-2 rounded-md bg-gradient-to-r from-purple-600 to-fuchsia-500 px-3.5 py-1.5 text-xs font-semibold text-white shadow-[0_0_30px_-8px_oklch(0.74_0.22_305_/_0.55)] transition hover:scale-[1.02] active:scale-[0.98]"
               >
                 <Activity className="h-3.5 w-3.5" />
-                Find New Leads
+                {t("shell.runPipeline")}
               </button>
 
               <DropdownMenu>
@@ -148,7 +148,7 @@ export function Shell() {
                       </div>
                     </div>
                     <Avatar className="h-8 w-8 border border-white/10 ring-1 ring-white/5">
-                      <AvatarFallback className="bg-gradient-to-br from-blue-600/30 to-cyan-400/20 text-[10px] font-semibold text-cyan-300">
+                      <AvatarFallback className="bg-gradient-to-br from-purple-600/30 to-fuchsia-500/20 text-[10px] font-semibold text-purple-200">
                         {initials}
                       </AvatarFallback>
                     </Avatar>
@@ -176,7 +176,7 @@ export function Shell() {
                       className="text-xs text-purple-400 hover:text-purple-300 cursor-pointer"
                     >
                       <Code2 className="mr-2 h-3.5 w-3.5" />
-                      Reset Onboarding
+                      {t("settings.onboarding.reset")}
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem asChild>
