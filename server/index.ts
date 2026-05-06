@@ -27,6 +27,21 @@
 
 import "dotenv/config";
 
+
+// Initialize Sentry as early as possible
+import * as Sentry from "@sentry/node";
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || "development",
+  release: process.env.SENTRY_RELEASE || "unknown",
+  tracesSampleRate: 1.0,
+  integrations: [
+    Sentry.httpIntegration(),
+    Sentry.expressIntegration(),
+  ],
+});
+
 import express from "express";
 import { createServer } from "http";
 import crypto from "node:crypto";
@@ -244,6 +259,48 @@ function getRequestId(req: express.Request): string {
     req.get("x-request-id") ??
     makeRequestId()
   );
+}
+
+/** Unified error response format for all API endpoints. */
+function unifiedError(
+  res: express.Response,
+  code: string,
+  message: string,
+  statusCode: number = 400,
+  requestId?: string
+): void {
+  res.status(statusCode).json({ ok: false, code, message, requestId });
+}
+
+/** Unified error response for auth-required errors. */
+function unifiedAuthError(res: express.Response, requestId?: string): void {
+  unifiedError(res, "AUTH_REQUIRED", "Authentication required", 401, requestId);
+}
+
+/** Unified error response for validation errors. */
+function unifiedValidationError(res: express.Response, field?: string, requestId?: string): void {
+  const message = field ? `Invalid ${field}` : "Invalid request";
+  unifiedError(res, "VALIDATION_ERROR", message, 400, requestId);
+}
+
+/** Unified error response for resource not found. */
+function unifiedNotFoundError(res: express.Response, resource: string, requestId?: string): void {
+  unifiedError(res, "NOT_FOUND", `${resource} not found`, 404, requestId);
+}
+
+/** Unified error response for permission denied. */
+function unifiedPermissionError(res: express.Response, requestId?: string): void {
+  unifiedError(res, "PERMISSION_DENIED", "Insufficient permissions", 403, requestId);
+}
+
+/** Unified error response for rate limiting. */
+function unifiedRateLimitError(res: express.Response, message: string = "Too many requests. Please retry shortly.", requestId?: string): void {
+  unifiedError(res, "RATE_LIMITED", message, 429, requestId);
+}
+
+/** Unified error response for service unavailable. */
+function unifiedServiceUnavailable(res: express.Response, message: string = "Service temporarily unavailable.", requestId?: string): void {
+  unifiedError(res, "SERVICE_UNAVAILABLE", message, 503, requestId);
 }
 
 function readWorkspaceIdFromRequest(req: express.Request): string | null {
@@ -868,6 +925,8 @@ export async function buildApp(): Promise<express.Express> {
 
   const app = express();
   app.disable("x-powered-by");
+
+  // Sentry request handlers (must be first)
   const entitlementDb = new EntitlementDb({
     databaseUrl: process.env.DATABASE_URL,
   });
@@ -911,7 +970,7 @@ export async function buildApp(): Promise<express.Express> {
       max: 180,
       standardHeaders: true,
       legacyHeaders: false,
-      message: { ok: false, error: "Too many requests. Please retry shortly." },
+      message: { ok: false, code: "RATE_LIMITED", message: "Too many requests. Please retry shortly." },
     })
   );
   const authLimiter = rateLimit({
@@ -921,7 +980,8 @@ export async function buildApp(): Promise<express.Express> {
     legacyHeaders: false,
     message: {
       ok: false,
-      error: "Too many login attempts. Try again in a few minutes.",
+      code: "RATE_LIMITED",
+      message: "Too many login attempts. Try again in a few minutes.",
     },
   });
   const llmLimiter = rateLimit({
@@ -931,7 +991,8 @@ export async function buildApp(): Promise<express.Express> {
     legacyHeaders: false,
     message: {
       ok: false,
-      error: "Too many AI requests. Please wait a moment.",
+      code: "RATE_LIMITED",
+      message: "Too many AI requests. Please wait a moment.",
     },
   });
 
@@ -942,9 +1003,7 @@ export async function buildApp(): Promise<express.Express> {
     if (origin && !isOriginAllowed(origin, allowedOrigins)) {
       if (req.method === "OPTIONS") return res.sendStatus(403);
       if (req.path.startsWith("/api/")) {
-        return res
-          .status(403)
-          .json({ ok: false, error: "Origin not allowed." });
+        return unifiedError(res, "ORIGIN_NOT_ALLOWED", "Origin not allowed.", 403);
       }
     }
     if (origin) {
@@ -984,9 +1043,7 @@ export async function buildApp(): Promise<express.Express> {
     const csrfCookie = parseCookie(req, CSRF_COOKIE_NAME);
     const csrfHeader = req.get("x-csrf-token");
     if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
-      return res
-        .status(403)
-        .json({ ok: false, error: "CSRF token invalid or missing." });
+      return unifiedError(res, "CSRF_INVALID", "CSRF token invalid or missing.", 403);
     }
     return next();
   });
@@ -1031,20 +1088,84 @@ export async function buildApp(): Promise<express.Express> {
     bodyMarkdown: z.string().min(1).max(50000),
   });
 
+  // ──────────── Additional Zod schemas for endpoints without validation
+  const enrichLeadsSchema = z.object({
+    leadIds: z.array(z.string().uuid()).min(1),
+  });
+
+  const persistLeadsSchema = z.object({
+    leads: z.array(z.any()).min(1),
+  });
+
+  const createSequenceSchema = z.object({
+    name: z.string().min(1).max(300),
+    steps: z.array(z.any()).min(1),
+  });
+
+  const enrollSequenceSchema = z.object({
+    leadId: z.string().uuid(),
+  });
+
+  const billingCheckoutSchema = z.object({
+    priceId: z.string().min(1),
+  });
+
+  const gdprDeletionRequestSchema = z.object({
+    leadId: z.string().uuid(),
+    requestSource: z.enum(["user_request", "bounce", "complaint"]).optional(),
+  });
+
+  const resendWebhookSchema = z.object({
+    events: z.array(z.any()).min(1),
+  });
+
+  const updateICPSchema = z.object({
+    business_description: z.string().max(5000).optional(),
+    ideal_customer: z.string().max(2000).optional(),
+    problem_solved: z.string().max(2000).optional(),
+  });
+
+  const updateBrandSchema = z.object({
+    brandName: z.string().max(300).optional(),
+    brandLogoUrl: z.string().url().optional().or(z.literal("")),
+    brandPrimaryColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+    customDomain: z.string().optional(),
+    fromEmail: z.string().email().max(320).optional(),
+  });
+
+  const deleteWorkspaceSchema = z.object({
+    confirmation: z.literal("DELETE_WORKSPACE"),
+  });
+
+  const createABTestSchema = z.object({
+    sequenceId: z.string().uuid(),
+    stepNumber: z.coerce.number().int().positive(),
+    variants: z.array(z.any()).min(2),
+  });
+
+  const promoteABTestSchema = z.object({
+    winnerVariantId: z.string().uuid(),
+  });
+
+  const seedLeadsSchema = z.object({
+    count: z.coerce.number().int().positive().max(20).optional(),
+    businessDescription: z.string().max(5000).optional(),
+    targetAudience: z.string().max(2000).optional(),
+  });
+
   app.post("/api/auth/login", authLimiter, (req, res) => {
     const parsed = loginSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "email + password required" });
+      return unifiedValidationError(res, "email + password");
     }
     const { email, password } = parsed.data as LoginBody;
     if (!ALLOW_DEMO_AUTH) {
-      return res.status(503).json({
-        ok: false,
-        error:
-          "Auth provider not configured. Set ALLOW_DEMO_AUTH=true only for controlled dev.",
-      });
+      return unifiedError(
+        res,
+        "AUTH_NOT_CONFIGURED",
+        "Auth provider not configured. Set ALLOW_DEMO_AUTH=true only for controlled dev.",
+        503
+      );
     }
     const normalizedEmail = email.trim().toLowerCase();
     const ip = req.ip ?? "unknown_ip";
@@ -1056,10 +1177,10 @@ export async function buildApp(): Promise<express.Express> {
       if (elapsed > LOGIN_WINDOW_MS) {
         loginAttempts.delete(attemptKey);
       } else if (attempt.count >= LOGIN_MAX_ATTEMPTS) {
-        return res.status(429).json({
-          ok: false,
-          error: "Too many login attempts. Try again in a few minutes.",
-        });
+        return unifiedRateLimitError(
+          res,
+          "Too many login attempts. Try again in a few minutes."
+        );
       }
     }
 
@@ -1074,9 +1195,7 @@ export async function buildApp(): Promise<express.Express> {
           firstAt: prev.firstAt,
         });
       }
-      return res
-        .status(401)
-        .json({ ok: false, error: "Invalid email or password." });
+      return unifiedError(res, "INVALID_CREDENTIALS", "Invalid email or password.", 401);
     }
 
     loginAttempts.delete(attemptKey);
@@ -1105,7 +1224,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get("/api/auth/csrf", (req, res) => {
     const token = parseCookie(req, AUTH_COOKIE_NAME);
     if (!token || !verifySession(token)) {
-      return res.status(401).json({ ok: false, error: "No active session" });
+      return unifiedAuthError(res);
     }
     const csrfToken = createCsrfToken();
     setCsrfCookie(req, res, csrfToken);
@@ -1116,10 +1235,10 @@ export async function buildApp(): Promise<express.Express> {
   app.get("/api/auth/session", (req, res) => {
     const token = parseCookie(req, AUTH_COOKIE_NAME);
     if (!token)
-      return res.status(401).json({ ok: false, error: "No active session" });
+      return unifiedAuthError(res);
     const payload = verifySession(token);
     if (!payload)
-      return res.status(401).json({ ok: false, error: "Session expired" });
+      return unifiedError(res, "SESSION_EXPIRED", "Session expired", 401);
     const csrfToken = createCsrfToken();
     setCsrfCookie(req, res, csrfToken);
     return res.json({ ok: true, user: payload.user, csrfToken });
@@ -1134,9 +1253,7 @@ export async function buildApp(): Promise<express.Express> {
   const requireAuth: express.RequestHandler = (req, res, next) => {
     const user = getSessionUser(req);
     if (!user) {
-      return res
-        .status(401)
-        .json({ ok: false, error: "Authentication required" });
+      return unifiedAuthError(res);
     }
     return next();
   };
@@ -1148,9 +1265,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       // If Supabase is configured, fetch real workspaces
@@ -1192,9 +1307,7 @@ export async function buildApp(): Promise<express.Express> {
             requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
             error: String(err),
           });
-          return res
-            .status(502)
-            .json({ ok: false, error: "Failed to fetch workspaces" });
+          return unifiedError(res, "WORKSPACES_FETCH_FAILED", "Failed to fetch workspaces", 502);
         }
       }
 
@@ -1222,9 +1335,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { id } = req.params as { id: string };
@@ -1260,20 +1371,18 @@ export async function buildApp(): Promise<express.Express> {
     "/api/workspaces/:id/icp",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = updateICPSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "ICP data");
+      }
+      const { business_description, ideal_customer, problem_solved } =
+        parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { id } = req.params as { id: string };
-      const { business_description, ideal_customer, problem_solved } =
-        req.body as {
-          business_description?: string;
-          ideal_customer?: string;
-          problem_solved?: string;
-        };
 
       const targetWorkspaceId = id;
       await assertWorkspaceAccessWithContext(req, user, targetWorkspaceId);
@@ -1303,10 +1412,7 @@ export async function buildApp(): Promise<express.Express> {
             requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
             error: String(err),
           });
-          return res.status(502).json({
-            ok: false,
-            error: "Failed to save ICP profile",
-          });
+          return unifiedError(res, "ICP_SAVE_FAILED", "Failed to save ICP profile", 502);
         }
       }
 
@@ -1322,15 +1428,10 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
       if (!entitlementDb.isConfigured) {
-        return res.status(503).json({
-          ok: false,
-          error: "DATABASE_URL is required for entitlements.",
-        });
+        return unifiedServiceUnavailable(res, "DATABASE_URL is required for entitlements.");
       }
       const workspaceId = await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
@@ -1362,7 +1463,7 @@ export async function buildApp(): Promise<express.Express> {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({ ok: false, error: clientSafeError(err) });
+        return unifiedError(res, "ENTITLEMENT_USAGE_FAILED", clientSafeError(err), 502);
       }
     })
   );
@@ -1374,17 +1475,13 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
       await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
       const parsed = entitlementStartSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Invalid entitlement payload." });
+        return unifiedValidationError(res, "entitlement payload");
       }
       const workspaceId = await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
@@ -1396,17 +1493,16 @@ export async function buildApp(): Promise<express.Express> {
         Number(requestedLeads ?? limits.maxLeadsPerRun)
       );
       if (requested > limits.maxLeadsPerRun) {
-        return res.status(400).json({
-          ok: false,
-          error: `Plan allows max ${limits.maxLeadsPerRun} leads per run.`,
-        });
+        return unifiedError(
+          res,
+          "MAX_LEADS_PER_RUN_EXCEEDED",
+          `Plan allows max ${limits.maxLeadsPerRun} leads per run.`,
+          400
+        );
       }
 
       if (!entitlementDb.isConfigured) {
-        return res.status(503).json({
-          ok: false,
-          error: "DATABASE_URL is required for entitlements.",
-        });
+        return unifiedServiceUnavailable(res, "DATABASE_URL is required for entitlements.");
       }
       try {
         const usageMonth = getCurrentMonthKey();
@@ -1414,7 +1510,8 @@ export async function buildApp(): Promise<express.Express> {
         if (limits.leads !== -1 && usage.leads + requested > limits.leads) {
           return res.status(403).json({
             ok: false,
-            error:
+            code: "MONTHLY_LEAD_LIMIT_REACHED",
+            message:
               "Monthly lead limit reached. Upgrade plan or wait for next month.",
             tier: workspaceTier,
             leadsUsed: usage.leads,
@@ -1436,7 +1533,7 @@ export async function buildApp(): Promise<express.Express> {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({ ok: false, error: clientSafeError(err) });
+        return unifiedError(res, "ENTITLEMENT_RESEARCH_START_FAILED", clientSafeError(err), 502);
       }
     })
   );
@@ -1449,26 +1546,19 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
       const workspaceId = await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
       if (!entitlementDb.isConfigured) {
-        return res.status(503).json({
-          ok: false,
-          error: "DATABASE_URL is required for entitlements.",
-        });
+        return unifiedServiceUnavailable(res, "DATABASE_URL is required for entitlements.");
       }
       const workspaceTier = await getWorkspaceTier(workspaceId);
       const limits = TIER_LIMITS[workspaceTier];
       const usageMonth = getCurrentMonthKey();
       const parsed = generateLeadsSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Invalid lead generation payload." });
+        return unifiedValidationError(res, "lead generation payload");
       }
       const body = parsed.data as GenerateLeadsBody;
       const requested = Math.max(
@@ -1487,7 +1577,8 @@ export async function buildApp(): Promise<express.Express> {
       if (!consumed.allowed) {
         return res.status(403).json({
           ok: false,
-          error:
+          code: "MONTHLY_LEAD_LIMIT_REACHED",
+          message:
             "Monthly lead limit reached. Upgrade plan or wait for next month.",
           tier: workspaceTier,
           leadsUsed: consumed.usage.leads,
@@ -1619,18 +1710,14 @@ export async function buildApp(): Promise<express.Express> {
     "/api/leads/enrich",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = enrichLeadsSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "leadIds array");
+      }
+      const { leadIds } = parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
-      }
-
-      const { leadIds } = req.body as { leadIds: string[] };
-      if (!Array.isArray(leadIds) || leadIds.length === 0) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "leadIds array required" });
+        return unifiedAuthError(res);
       }
 
       try {
@@ -1638,10 +1725,7 @@ export async function buildApp(): Promise<express.Express> {
         requireWorkspaceRole(req, "member");
 
         if (!entitlementDb.isConfigured) {
-          return res.status(503).json({
-            ok: false,
-            error: "DATABASE_URL is required for entitlements.",
-          });
+          return unifiedServiceUnavailable(res, "DATABASE_URL is required for entitlements.");
         }
 
         const workspaceTier = await getWorkspaceTier(targetWorkspaceId);
@@ -1661,7 +1745,8 @@ export async function buildApp(): Promise<express.Express> {
         if (!consumed.allowed) {
           return res.status(403).json({
             ok: false,
-            error: "Monthly API call limit reached. Upgrade plan or wait for next month.",
+            code: "MONTHLY_API_CALL_LIMIT_REACHED",
+            message: "Monthly API call limit reached. Upgrade plan or wait for next month.",
             tier: workspaceTier,
             apiCallsUsed: currentUsage.apiCalls,
             monthlyApiCalls: limits.apiCalls,
@@ -1684,7 +1769,7 @@ export async function buildApp(): Promise<express.Express> {
           .eq("workspace_id", targetWorkspaceId);
 
         if (error || !leads) {
-          return res.status(500).json({ ok: false, error: "Failed to fetch leads" });
+          return unifiedError(res, "LEADS_FETCH_FAILED", "Failed to fetch leads", 500);
         }
 
         const enrichedLeads = [];
@@ -1750,7 +1835,7 @@ export async function buildApp(): Promise<express.Express> {
         });
       } catch (err) {
         console.error("Enrichment error:", err);
-        return res.status(500).json({ ok: false, error: "Enrichment failed" });
+        return unifiedError(res, "ENRICHMENT_FAILED", "Enrichment failed", 500);
       }
     })
   );
@@ -1760,14 +1845,15 @@ export async function buildApp(): Promise<express.Express> {
     "/api/leads/persist",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = persistLeadsSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "leads array");
+      }
+      const { leads } = parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
-
-      const { leads } = req.body as { leads: any[] };
 
       try {
         const targetWorkspaceId = await resolveWorkspaceId(req, user);
@@ -1813,10 +1899,7 @@ export async function buildApp(): Promise<express.Express> {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({
-          ok: false,
-          error: "Failed to persist leads",
-        });
+        return unifiedError(res, "LEADS_PERSIST_FAILED", "Failed to persist leads", 502);
       }
     })
   );
@@ -1827,22 +1910,19 @@ export async function buildApp(): Promise<express.Express> {
       "/api/dev/seed-leads",
       requireAuth,
       asyncHandler(async (req, res) => {
-        const user = getSessionUser(req);
-        if (!user) {
-          return res
-            .status(401)
-            .json({ ok: false, error: "Authentication required" });
+        const parsed = seedLeadsSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+          return unifiedValidationError(res, "seed-leads payload");
         }
-
         const {
           count = 5,
           businessDescription = "B2B SaaS",
           targetAudience = "Growth-stage startups",
-        } = req.body as {
-          count?: number;
-          businessDescription?: string;
-          targetAudience?: string;
-        };
+        } = parsed.data;
+        const user = getSessionUser(req);
+        if (!user) {
+          return unifiedAuthError(res);
+        }
 
         const leads = synthesizeServerLeads({
           count: Math.min(count, 20),
@@ -1869,9 +1949,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const parsed = generateEmailSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Invalid email generation payload." });
+        return unifiedValidationError(res, "email generation payload");
       }
       const body = parsed.data as GenerateEmailBody;
       const lead = body.lead ?? {};
@@ -1887,9 +1965,7 @@ export async function buildApp(): Promise<express.Express> {
         ? lead.uniqueAngles.filter((a): a is string => typeof a === "string")
         : [];
       if (!firstName) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "lead.firstName required" });
+        return unifiedValidationError(res, "lead.firstName");
       }
 
       const businessDescription = (
@@ -1968,7 +2044,7 @@ export async function buildApp(): Promise<express.Express> {
         return res.status(200).json({ ok: true, database: "ok" });
       } catch (err) {
         logEvent("error", "readiness_db_ping_failed", { error: String(err) });
-        return res.status(503).json({ ok: false, database: "unavailable" });
+        return unifiedError(res, "DB_PING_FAILED", "Database unavailable", 503);
       }
     })
   );
@@ -1999,31 +2075,31 @@ export async function buildApp(): Promise<express.Express> {
     "/api/billing/checkout",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = billingCheckoutSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "priceId");
+      }
+      const { priceId } = parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
       const stripeKey = process.env.STRIPE_SECRET_KEY;
       if (!stripeKey) {
-        return res.status(503).json({
-          ok: false,
-          code: "STRIPE_NOT_CONFIGURED",
-          message: "Stripe ist noch nicht konfiguriert. Kommt bald.",
-        });
+        return unifiedError(
+          res,
+          "STRIPE_NOT_CONFIGURED",
+          "Stripe ist noch nicht konfiguriert. Kommt bald.",
+          503
+        );
       }
-      const { priceId } = req.body as { priceId: string };
       const allowedPriceIds = [
         process.env.STRIPE_PRICE_SOLO,
         process.env.STRIPE_PRICE_TEAM,
         process.env.STRIPE_PRICE_AGENCY,
       ].filter((v): v is string => Boolean(v));
       if (!allowedPriceIds.includes(priceId)) {
-        return res.status(400).json({
-          ok: false,
-          error: "Invalid priceId.",
-        });
+        return unifiedValidationError(res, "priceId");
       }
 
       const workspaceId = await resolveWorkspaceId(req, user);
@@ -2067,14 +2143,12 @@ export async function buildApp(): Promise<express.Express> {
       const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
       if (!stripeKey || !webhookSecret) {
-        return res
-          .status(503)
-          .json({ ok: false, error: "Stripe not configured" });
+        return unifiedServiceUnavailable(res, "Stripe not configured");
       }
 
       const sig = req.headers["stripe-signature"] as string;
       if (!sig) {
-        return res.status(400).json({ ok: false, error: "Missing signature" });
+        return unifiedError(res, "MISSING_SIGNATURE", "Missing signature", 400);
       }
 
       const { default: Stripe } = await import("stripe");
@@ -2084,7 +2158,7 @@ export async function buildApp(): Promise<express.Express> {
       try {
         event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
       } catch (err) {
-        return res.status(400).json({ ok: false, error: "Invalid signature" });
+        return unifiedError(res, "INVALID_SIGNATURE", "Invalid signature", 400);
       }
 
       switch (event.type) {
@@ -2175,17 +2249,15 @@ export async function buildApp(): Promise<express.Express> {
     "/api/sequences",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = createSequenceSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "name and steps");
+      }
+      const { name, steps } = parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
-
-      const { name, steps } = req.body as {
-        name: string;
-        steps: any[];
-      };
 
       const workspaceId = await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "admin");
@@ -2214,10 +2286,7 @@ export async function buildApp(): Promise<express.Express> {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({
-          ok: false,
-          error: "Failed to create sequence",
-        });
+        return unifiedError(res, "SEQUENCE_CREATE_FAILED", "Failed to create sequence", 502);
       }
     })
   );
@@ -2228,9 +2297,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const workspaceId = await resolveWorkspaceId(req, user);
@@ -2255,10 +2322,7 @@ export async function buildApp(): Promise<express.Express> {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({
-          ok: false,
-          error: "Failed to fetch sequences",
-        });
+        return unifiedError(res, "SEQUENCES_FETCH_FAILED", "Failed to fetch sequences", 502);
       }
     })
   );
@@ -2267,15 +2331,17 @@ export async function buildApp(): Promise<express.Express> {
     "/api/sequences/:id/enroll",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = enrollSequenceSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "leadId");
+      }
+      const { leadId } = parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { id } = req.params as { id: string };
-      const { leadId } = req.body as { leadId: string };
 
       await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "admin");
@@ -2292,9 +2358,7 @@ export async function buildApp(): Promise<express.Express> {
           .single();
 
         if (sequenceError || !sequence) {
-          return res
-            .status(404)
-            .json({ ok: false, error: "Sequence not found" });
+          return unifiedNotFoundError(res, "Sequence");
         }
 
         await assertWorkspaceAccessWithContext(req, user, sequence.workspace_id);
@@ -2305,7 +2369,7 @@ export async function buildApp(): Promise<express.Express> {
           .eq("id", leadId)
           .single();
         if (leadError || !leadRow) {
-          return res.status(404).json({ ok: false, error: "Lead not found" });
+          return unifiedNotFoundError(res, "Lead");
         }
         if (leadRow.workspace_id !== sequence.workspace_id) {
           throw httpError(403, "Workspace access denied.");
@@ -2338,10 +2402,7 @@ export async function buildApp(): Promise<express.Express> {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({
-          ok: false,
-          error: "Failed to enroll lead in sequence",
-        });
+        return unifiedError(res, "SEQUENCE_ENROLL_FAILED", "Failed to enroll lead in sequence", 502);
       }
     })
   );
@@ -2352,9 +2413,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { id, leadId } = req.params as { id: string; leadId: string };
@@ -2373,9 +2432,7 @@ export async function buildApp(): Promise<express.Express> {
           .eq("lead_id", leadId)
           .single();
         if (findError || !enrollment) {
-          return res
-            .status(404)
-            .json({ ok: false, error: "Enrollment not found" });
+          return unifiedNotFoundError(res, "Enrollment");
         }
         await assertWorkspaceAccessWithContext(req, user, enrollment.workspace_id);
         requireWorkspaceRole(req, "admin");
@@ -2394,10 +2451,7 @@ export async function buildApp(): Promise<express.Express> {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(502).json({
-          ok: false,
-          error: "Failed to remove lead from sequence",
-        });
+        return unifiedError(res, "SEQUENCE_UNENROLL_FAILED", "Failed to remove lead from sequence", 502);
       }
     })
   );
@@ -2407,18 +2461,15 @@ export async function buildApp(): Promise<express.Express> {
     "/api/ab-tests",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = createABTestSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "sequenceId, stepNumber, and variants");
+      }
+      const { sequenceId, stepNumber, variants } = parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
-
-      const { sequenceId, stepNumber, variants } = req.body as {
-        sequenceId: string;
-        stepNumber: number;
-        variants: any[];
-      };
 
       const workspaceId = await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "admin");
@@ -2438,19 +2489,14 @@ export async function buildApp(): Promise<express.Express> {
         if (abTestId) {
           return res.json({ ok: true, abTestId });
         } else {
-          return res
-            .status(500)
-            .json({ ok: false, error: "Failed to create A/B test" });
+          return unifiedError(res, "AB_TEST_CREATE_FAILED", "Failed to create A/B test", 500);
         }
       } catch (err) {
         logEvent("error", "ab_test_create_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to create A/B test",
-        });
+        return unifiedError(res, "AB_TEST_CREATE_FAILED", "Failed to create A/B test", 500);
       }
     })
   );
@@ -2461,9 +2507,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { id } = req.params as { id: string };
@@ -2480,9 +2524,7 @@ export async function buildApp(): Promise<express.Express> {
           .eq("id", id)
           .single();
         if (abTestError || !abTestRow) {
-          return res
-            .status(404)
-            .json({ ok: false, error: "A/B test not found" });
+          return unifiedNotFoundError(res, "A/B test");
         }
         if (abTestRow.workspace_id !== workspaceId) {
           throw httpError(403, "Workspace access denied.");
@@ -2522,10 +2564,7 @@ export async function buildApp(): Promise<express.Express> {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to get A/B test results",
-        });
+        return unifiedError(res, "AB_TEST_RESULTS_FAILED", "Failed to get A/B test results", 500);
       }
     })
   );
@@ -2534,15 +2573,17 @@ export async function buildApp(): Promise<express.Express> {
     "/api/ab-tests/:id/promote",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = promoteABTestSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "winnerVariantId");
+      }
+      const { winnerVariantId } = parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { id } = req.params as { id: string };
-      const { winnerVariantId } = req.body as { winnerVariantId: string };
 
       try {
         const workspaceId = await resolveWorkspaceId(req, user);
@@ -2556,9 +2597,7 @@ export async function buildApp(): Promise<express.Express> {
           .eq("id", id)
           .single();
         if (abTestError || !abTestRow) {
-          return res
-            .status(404)
-            .json({ ok: false, error: "A/B test not found" });
+          return unifiedNotFoundError(res, "A/B test");
         }
         if (abTestRow.workspace_id !== workspaceId) {
           throw httpError(403, "Workspace access denied.");
@@ -2572,10 +2611,7 @@ export async function buildApp(): Promise<express.Express> {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to promote winner",
-        });
+        return unifiedError(res, "AB_TEST_PROMOTE_FAILED", "Failed to promote winner", 500);
       }
     })
   );
@@ -2587,9 +2623,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const {
@@ -2611,10 +2645,7 @@ export async function buildApp(): Promise<express.Express> {
       requireWorkspaceRole(req, "member");
 
       if (!entitlementDb.isConfigured) {
-        return res.status(503).json({
-          ok: false,
-          error: "DATABASE_URL is required for entitlements.",
-        });
+        return unifiedServiceUnavailable(res, "DATABASE_URL is required for entitlements.");
       }
       const workspaceTier = await getWorkspaceTier(targetWorkspaceId);
       const limits = TIER_LIMITS[workspaceTier];
@@ -2629,7 +2660,8 @@ export async function buildApp(): Promise<express.Express> {
       if (!consumed.allowed) {
         return res.status(403).json({
           ok: false,
-          error:
+          code: "MONTHLY_EXPORT_LIMIT_REACHED",
+          message:
             "Monthly export limit reached. Upgrade plan or wait for next month.",
           tier: workspaceTier,
           exportsUsed: consumed.usage.exports,
@@ -2638,9 +2670,7 @@ export async function buildApp(): Promise<express.Express> {
       }
 
       if (!admin) {
-        return res
-          .status(503)
-          .json({ ok: false, error: "Export not available without database" });
+        return unifiedServiceUnavailable(res, "Export not available without database");
       }
 
       try {
@@ -2669,10 +2699,7 @@ export async function buildApp(): Promise<express.Express> {
             break;
 
           default:
-            return res.status(400).json({
-              ok: false,
-              error: "Invalid format. Use: csv, hubspot, or salesforce",
-            });
+            return unifiedValidationError(res, "format (csv, hubspot, or salesforce)");
         }
 
         // Set headers for file download
@@ -2692,7 +2719,7 @@ export async function buildApp(): Promise<express.Express> {
 
         const errorMessage =
           err instanceof Error ? err.message : "Export failed";
-        return res.status(500).json({ ok: false, error: errorMessage });
+        return unifiedError(res, "LEADS_EXPORT_FAILED", errorMessage, 500);
       }
     })
   );
@@ -2704,9 +2731,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { limit = 50, action } = req.query as {
@@ -2735,10 +2760,7 @@ export async function buildApp(): Promise<express.Express> {
           workspaceId,
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to fetch audit logs",
-        });
+        return unifiedError(res, "AUDIT_LOGS_FETCH_FAILED", "Failed to fetch audit logs", 500);
       }
     })
   );
@@ -2749,9 +2771,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { format = "csv", action } = req.query as {
@@ -2763,9 +2783,7 @@ export async function buildApp(): Promise<express.Express> {
       requireWorkspaceRole(req, "admin");
 
       if (!admin) {
-        return res
-          .status(503)
-          .json({ ok: false, error: "Export not available without database" });
+        return unifiedServiceUnavailable(res, "Export not available without database");
       }
 
       try {
@@ -2823,10 +2841,7 @@ export async function buildApp(): Promise<express.Express> {
           format,
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to export audit logs",
-        });
+        return unifiedError(res, "AUDIT_LOGS_EXPORT_FAILED", "Failed to export audit logs", 500);
       }
     })
   );
@@ -2838,9 +2853,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { id } = req.params as { id: string };
@@ -2848,10 +2861,7 @@ export async function buildApp(): Promise<express.Express> {
       requireWorkspaceRole(req, "member");
 
       if (!admin) {
-        return res.status(503).json({
-          ok: false,
-          error: "GDPR features not available without database",
-        });
+        return unifiedServiceUnavailable(res, "GDPR features not available without database");
       }
 
       try {
@@ -2864,14 +2874,12 @@ export async function buildApp(): Promise<express.Express> {
           .single();
 
         if (leadError || !lead) {
-          return res.status(404).json({ ok: false, error: "Lead not found" });
+          return unifiedNotFoundError(res, "Lead");
         }
 
         const userEmail = lead.email;
         if (!userEmail) {
-          return res
-            .status(400)
-            .json({ ok: false, error: "Lead has no email address" });
+          return unifiedValidationError(res, "Lead has no email address");
         }
 
         // Prüfe ob bereits Löschantrag existiert
@@ -2919,9 +2927,7 @@ export async function buildApp(): Promise<express.Express> {
             ).toISOString(),
           });
         } else {
-          return res
-            .status(500)
-            .json({ ok: false, error: "Failed to create deletion request" });
+          return unifiedError(res, "DELETION_REQUEST_FAILED", "Failed to create deletion request", 500);
         }
       } catch (err) {
         logEvent("error", "deletion_request_failed", {
@@ -2929,10 +2935,7 @@ export async function buildApp(): Promise<express.Express> {
           leadId: id,
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to create deletion request",
-        });
+        return unifiedError(res, "DELETION_REQUEST_FAILED", "Failed to create deletion request", 500);
       }
     })
   );
@@ -2944,9 +2947,7 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { id } = req.params as { id: string };
@@ -2954,9 +2955,7 @@ export async function buildApp(): Promise<express.Express> {
       requireWorkspaceRole(req, "owner");
 
       if (!admin) {
-        return res
-          .status(503)
-          .json({ ok: false, error: "Export not available without database" });
+        return unifiedServiceUnavailable(res, "Export not available without database");
       }
 
       try {
@@ -3004,30 +3003,25 @@ export async function buildApp(): Promise<express.Express> {
     "/api/workspaces/:id/delete",
     requireAuth,
     asyncHandler(async (req, res) => {
-      const user = getSessionUser(req);
-      if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
-      }
-
-      const { id } = req.params as { id: string };
-      const { confirmation } = req.body as { confirmation: string };
-
-      if (confirmation !== "DELETE_WORKSPACE") {
+      const parsed = deleteWorkspaceSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
         return res.status(400).json({
           ok: false,
           error:
             "Confirmation required. Send { confirmation: 'DELETE_WORKSPACE' }",
         });
       }
+      const user = getSessionUser(req);
+      if (!user) {
+        return unifiedAuthError(res);
+      }
+
+      const { id } = req.params as { id: string };
 
       await assertWorkspaceOwner(req, user, id);
 
       if (!admin) {
-        return res
-          .status(503)
-          .json({ ok: false, error: "Delete not available without database" });
+        return unifiedServiceUnavailable(res, "Delete not available without database");
       }
 
       try {
@@ -3056,10 +3050,7 @@ export async function buildApp(): Promise<express.Express> {
           workspaceId: id,
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to delete workspace",
-        });
+        return unifiedError(res, "WORKSPACE_DELETE_FAILED", "Failed to delete workspace", 500);
       }
     })
   );
@@ -3093,9 +3084,7 @@ export async function buildApp(): Promise<express.Express> {
           .single();
 
         if (error || !data) {
-          return res
-            .status(404)
-            .json({ ok: false, error: "Workspace not found" });
+          return unifiedNotFoundError(res, "Workspace");
         }
 
         return res.json({
@@ -3114,10 +3103,7 @@ export async function buildApp(): Promise<express.Express> {
           workspaceId: id,
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to fetch brand settings",
-        });
+        return unifiedError(res, "BRAND_FETCH_FAILED", "Failed to fetch brand settings", 500);
       }
     })
   );
@@ -3127,21 +3113,17 @@ export async function buildApp(): Promise<express.Express> {
     "/api/workspaces/:id/brand",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = updateBrandSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "brand data");
+      }
+      const { brandName, brandLogoUrl, brandPrimaryColor, customDomain, fromEmail } = parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const { id } = req.params as { id: string };
-      const { brandName, brandLogoUrl, brandPrimaryColor, customDomain, fromEmail } = req.body as {
-        brandName?: string;
-        brandLogoUrl?: string;
-        brandPrimaryColor?: string;
-        customDomain?: string;
-        fromEmail?: string;
-      };
 
       await assertWorkspaceAccessWithContext(req, user, id);
       requireWorkspaceRole(req, "owner");
@@ -3183,10 +3165,7 @@ export async function buildApp(): Promise<express.Express> {
           workspaceId: id,
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to update brand settings",
-        });
+        return unifiedError(res, "BRAND_UPDATE_FAILED", "Failed to update brand settings", 500);
       }
     })
   );
@@ -3196,20 +3175,14 @@ export async function buildApp(): Promise<express.Express> {
     "/api/gdpr/deletion-request",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const parsed = gdprDeletionRequestSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "leadId");
+      }
+      const { leadId, requestSource } = parsed.data;
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
-      }
-
-      const { leadId, requestSource = "user_request" } = req.body as {
-        leadId: string;
-        requestSource?: "user_request" | "bounce" | "complaint";
-      };
-
-      if (!leadId) {
-        return res.status(400).json({ ok: false, error: "leadId required" });
+        return unifiedAuthError(res);
       }
 
       const workspaceId = await resolveWorkspaceId(req, user);
@@ -3224,7 +3197,7 @@ export async function buildApp(): Promise<express.Express> {
           workspaceId,
           leadId,
           userEmail: user.email,
-          requestSource,
+          requestSource: requestSource ?? "user_request",
         });
 
         return res.json({
@@ -3239,10 +3212,7 @@ export async function buildApp(): Promise<express.Express> {
           leadId,
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to create deletion request",
-        });
+        return unifiedError(res, "GDPR_DELETION_REQUEST_FAILED", "Failed to create deletion request", 500);
       }
     })
   );
@@ -3254,18 +3224,14 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
 
       const workspaceId = await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
 
       if (!admin) {
-        return res
-          .status(503)
-          .json({ ok: false, error: "GDPR features not available without database" });
+        return unifiedServiceUnavailable(res, "GDPR features not available without database");
       }
 
       try {
@@ -3285,10 +3251,7 @@ export async function buildApp(): Promise<express.Express> {
           userId: user.id,
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to export data",
-        });
+        return unifiedError(res, "GDPR_DATA_EXPORT_FAILED", "Failed to export data", 500);
       }
     })
   );
@@ -3297,25 +3260,21 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/webhooks/resend",
     asyncHandler(async (req, res) => {
+      const parsed = resendWebhookSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return unifiedValidationError(res, "events array");
+      }
+      const events = parsed.data.events;
       const signature = req.headers["resend-signature"] as string;
       const secret = process.env.RESEND_WEBHOOK_SECRET;
 
       if (!secret || !signature) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Missing signature or secret" });
+        return unifiedError(res, "MISSING_SIGNATURE_OR_SECRET", "Missing signature or secret", 401);
       }
 
       const payload = JSON.stringify(req.body);
       if (!validateResendWebhook(payload, signature, secret)) {
-        return res.status(401).json({ ok: false, error: "Invalid signature" });
-      }
-
-      const events = req.body as any[];
-      if (!Array.isArray(events)) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Invalid payload format" });
+        return unifiedError(res, "INVALID_SIGNATURE", "Invalid signature", 401);
       }
 
       const result = await handleResendWebhook(events);
@@ -3341,15 +3300,13 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
       await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
       const parsed = verifyEmailSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        return res.status(400).json({ ok: false, error: "email required" });
+        return unifiedValidationError(res, "email");
       }
       const { email } = parsed.data as VerifyEmailBody;
       const neverbounceKey = process.env.NEVERBOUNCE_API_KEY;
@@ -3404,17 +3361,13 @@ export async function buildApp(): Promise<express.Express> {
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
-        return res
-          .status(401)
-          .json({ ok: false, error: "Authentication required" });
+        return unifiedAuthError(res);
       }
       const workspaceId = await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
       const parsed = sendEmailSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "to + bodyMarkdown required" });
+        return unifiedValidationError(res, "to + bodyMarkdown");
       }
       const { to, subject, bodyMarkdown } = parsed.data as SendEmailBody;
       const resendKey = process.env.RESEND_API_KEY;
@@ -3459,9 +3412,7 @@ export async function buildApp(): Promise<express.Express> {
         );
         const json = (await resp.json()) as { id?: string; message?: string };
         if (!resp.ok) {
-          return res
-            .status(502)
-            .json({ ok: false, error: json.message ?? "send failed" });
+          return unifiedError(res, "EMAIL_SEND_FAILED", json.message ?? "send failed", 502);
         }
         await logAudit({
           workspaceId,
@@ -3488,7 +3439,7 @@ export async function buildApp(): Promise<express.Express> {
             toDomain,
           },
         });
-        return res.status(502).json({ ok: false, error: clientSafeError(err) });
+        return unifiedError(res, "EMAIL_SEND_FAILED", clientSafeError(err), 502);
       }
     })
   );
@@ -3550,7 +3501,7 @@ export async function buildApp(): Promise<express.Express> {
               : exposeDetail
                 ? String(err)
                 : "Internal server error.";
-        res.status(status).json({ ok: false, error: message, requestId });
+        res.status(status).json({ ok: false, code: "INTERNAL_ERROR", message, requestId });
       }
     }
   );
