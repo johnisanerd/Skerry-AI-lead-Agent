@@ -115,7 +115,7 @@ function BrandingPage() {
               <Label htmlFor="brand-name">{t("branding.brandName")}</Label>
               <Input
                 id="brand-name"
-                placeholder="Ihr Unternehmen"
+                placeholder={t("branding.brandNamePlaceholder")}
                 value={formData.brandName}
                 onChange={e =>
                   setFormData(prev => ({ ...prev, brandName: e.target.value }))
@@ -137,7 +137,7 @@ function BrandingPage() {
                 }
               />
               <p className="text-xs text-muted-foreground mt-1">
-                PNG oder SVG, empfohlene Größe: 200x40px
+                {t("branding.logoHint")}
               </p>
             </div>
 
@@ -177,7 +177,7 @@ function BrandingPage() {
                 <Globe className="w-4 h-4 mt-2.5 text-muted-foreground" />
                 <Input
                   id="custom-domain"
-                  placeholder="app.ihrunternehmen.de"
+                  placeholder={t("branding.customDomainPlaceholder")}
                   value={formData.customDomain}
                   onChange={e =>
                     setFormData(prev => ({
@@ -188,7 +188,7 @@ function BrandingPage() {
                 />
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Für Custom Domains kontaktieren Sie bitte unser Sales-Team
+                {t("branding.customDomainHint")}
               </p>
             </div>
 
@@ -198,7 +198,7 @@ function BrandingPage() {
                 <Mail className="w-4 h-4 mt-2.5 text-muted-foreground" />
                 <Input
                   id="from-email"
-                  placeholder="Ihr Unternehmen <team@ihrunternehmen.de>"
+                  placeholder={t("branding.emailPlaceholder")}
                   value={formData.fromEmail}
                   onChange={e =>
                     setFormData(prev => ({
@@ -209,7 +209,7 @@ function BrandingPage() {
                 />
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Muss in Resend verifiziert sein
+                {t("branding.emailHint")}
               </p>
             </div>
 
@@ -267,14 +267,14 @@ function BrandingPage() {
 
               <div className="space-y-2">
                 <div className="text-sm text-muted-foreground">
-                  <strong>From:</strong> {formData.fromEmail}
+                  <strong>{t("branding.from")}:</strong> {formData.fromEmail}
                 </div>
                 <div className="text-sm text-muted-foreground">
-                  <strong>Domain:</strong>{" "}
+                  <strong>{t("branding.domain")}:</strong>{" "}
                   {formData.customDomain || "skerry.app"}
                 </div>
                 <div className="text-sm text-muted-foreground">
-                  <strong>Primary Color:</strong> {formData.brandPrimaryColor}
+                  <strong>{t("branding.color")}:</strong> {formData.brandPrimaryColor}
                 </div>
               </div>
 
@@ -294,11 +294,7 @@ function BrandingPage() {
             </div>
 
             <div className="text-sm text-muted-foreground">
-              <p>
-                Die Vorschau zeigt wie Ihr Branding in der Anwendung aussehen
-                wird. Änderungen werden sofort angewendet wenn Sie auf
-                "Vorschau" klicken.
-              </p>
+              <p>{t("branding.previewDescription")}</p>
             </div>
           </CardContent>
         </Card>
@@ -313,12 +309,10 @@ function BrandingPage() {
             </div>
             <div>
               <h4 className="font-medium text-yellow-800">
-                White-Label Funktion
+                {t("branding.whiteLabel")}
               </h4>
               <p className="text-sm text-yellow-700 mt-1">
-                Diese Funktion ist Teil des Agency-Plans. Für vollständiges
-                White-Label mit eigener Domain und erweiterten Branding-Optionen
-                kontaktieren Sie bitte unser Sales-Team.
+                {t("branding.whiteLabelDesc")}
               </p>
             </div>
           </div>

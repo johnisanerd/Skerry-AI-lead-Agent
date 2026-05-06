@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { useWorkspaceStore } from "./workspaceStore";
+import { persistLeads as persistLeadsAPI, ServerGeneratedLead } from "@/lib/skerryApi";
 
 export type PipelineStage = "source" | "analyze" | "draft" | "send";
 
@@ -21,6 +22,8 @@ export interface Lead {
   newsletter: { title: string; subheading: string; body: string };
   stage: PipelineStage;
   pushedToInstantly?: boolean;
+  enriched?: Record<string, unknown>;
+  intentScore?: number;
 }
 
 const md = (l: {
@@ -175,6 +178,11 @@ interface LeadStore {
   selected: () => Lead | undefined;
   addLeads: (newLeads: Partial<Lead>[]) => void;
   updateLeadEmail: (id: string, emailBody: string) => void;
+  updateLeadEnrichment: (
+    id: string,
+    enriched: Record<string, unknown>,
+    intentScore: number
+  ) => void;
   clearAll: () => void;
   stats: () => LeadStats;
 }
@@ -261,19 +269,22 @@ export const useLeadStore = create<LeadStore>((set, get) => ({
       });
       const updatedLeads = [...s.leads, ...mapped];
 
-      // Fire-and-forget persist to Supabase
-      const workspaceId = useWorkspaceStore.getState().currentId;
-      if (workspaceId) {
-        fetch("/api/leads/persist", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ leads: mapped, workspaceId }),
-        }).catch(() => {
-          // Gracefully ignore persistence errors
-          console.warn("Failed to persist leads to database");
-        });
-      }
+      // Persist leads via API (fire-and-forget)
+      const persistMapped = mapped.map(l => ({
+        firstName: l.personal.firstName,
+        lastName: l.personal.lastName,
+        email: l.personal.email,
+        title: l.personal.title,
+        linkedin: l.personal.linkedin,
+        organization: l.organization,
+        websiteContext: l.extraction.websiteContext,
+        personContext: l.extraction.personContext,
+        uniqueAngles: l.extraction.uniqueAngles,
+      })) as ServerGeneratedLead[];
+
+      persistLeadsAPI(persistMapped).catch(() => {
+        console.warn("Failed to persist leads to database");
+      });
 
       return {
         leads: updatedLeads,
@@ -287,6 +298,13 @@ export const useLeadStore = create<LeadStore>((set, get) => ({
         l.id === id
           ? { ...l, newsletter: { ...l.newsletter, body: emailBody } }
           : l
+      ),
+    }));
+  },
+  updateLeadEnrichment: (id, enriched, intentScore) => {
+    set(s => ({
+      leads: s.leads.map(l =>
+        l.id === id ? { ...l, enriched, intentScore } : l
       ),
     }));
   },

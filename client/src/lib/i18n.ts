@@ -228,6 +228,17 @@ const translations = {
     "branding.outlineButton": "Outline Button",
     "branding.previewDescription":
       "The preview shows how your branding will look in the application. Changes are applied immediately when you click on 'Preview'.",
+    "branding.brandNamePlaceholder": "Your Company",
+    "branding.logoHint": "PNG or SVG, recommended size: 200x40px",
+    "branding.customDomainPlaceholder": "app.yourcompany.com",
+    "branding.customDomainHint": "Contact our Sales team for custom domain setup",
+    "branding.emailPlaceholder": "Your Company <team@yourcompany.com>",
+    "branding.emailHint": "Must be verified in Resend",
+    "branding.from": "From",
+    "branding.domain": "Domain",
+    "branding.color": "Primary Color",
+    "branding.whiteLabel": "White-Label Function",
+    "branding.whiteLabelDesc": "This feature is part of the Agency plan. For full white-label with custom domain and advanced branding options, please contact our Sales team.",
 
     // New Features - SaaS Components
     "workspace.title": "Workspaces",
@@ -1124,6 +1135,17 @@ const translations = {
     "branding.outlineButton": "Outline Button",
     "branding.previewDescription":
       'Die Vorschau zeigt wie Ihr Branding in der Anwendung aussehen wird. Änderungen werden sofort angewendet wenn Sie auf "Vorschau" klicken.',
+    "branding.brandNamePlaceholder": "Ihr Unternehmen",
+    "branding.logoHint": "PNG oder SVG, empfohlene Größe: 200x40px",
+    "branding.customDomainPlaceholder": "app.ihrunternehmen.de",
+    "branding.customDomainHint": "Für Custom Domains kontaktieren Sie bitte unser Sales-Team",
+    "branding.emailPlaceholder": "Ihr Unternehmen <team@ihrunternehmen.de>",
+    "branding.emailHint": "Muss in Resend verifiziert sein",
+    "branding.from": "Absender",
+    "branding.domain": "Domain",
+    "branding.color": "Primärfarbe",
+    "branding.whiteLabel": "White-Label Funktion",
+    "branding.whiteLabelDesc": "Diese Funktion ist Teil des Agency-Plans. Für vollständiges White-Label mit eigener Domain und erweiterten Branding-Optionen kontaktieren Sie bitte unser Sales-Team.",
 
     // New Features - Audit Logs
     "audit.title": "Audit-Protokolle",

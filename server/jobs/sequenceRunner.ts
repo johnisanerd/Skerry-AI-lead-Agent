@@ -12,6 +12,30 @@ import {
   calculateNextSendAt,
 } from "../pipeline/sequenceEngine.js";
 import { logEvent, makeRequestId } from "../lib/logger.js";
+import { EntitlementDb } from "../db.js";
+
+// Import from server/index.ts or define locally
+type AccountTier = "solo" | "team" | "agency";
+const TIER_LIMITS: Record<AccountTier, any> = {
+  solo: { monthlySends: 50 },
+  team: { monthlySends: 500 },
+  agency: { monthlySends: -1 },
+};
+
+function getCurrentMonthKey(): string {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+async function getWorkspaceTier(workspaceId: string): Promise<AccountTier> {
+  if (!admin) return "solo";
+  const { data } = await admin
+    .from("workspaces")
+    .select("plan_tier")
+    .eq("id", workspaceId)
+    .single();
+  return (data?.plan_tier as AccountTier) ?? "solo";
+}
 
 interface SequenceJobStats {
   processed: number;
@@ -126,6 +150,31 @@ async function processEnrollment(
   const sequence = enrollment.sequences;
   const lead = enrollment.leads;
   const steps = sequence.steps as any[];
+
+  // Entitlement Check
+  const entitlementDb = new EntitlementDb({ databaseUrl: process.env.DATABASE_URL });
+  if (entitlementDb.isConfigured) {
+    const workspaceTier = await getWorkspaceTier(sequence.workspace_id); // Need to define this
+    const limits = TIER_LIMITS[workspaceTier];
+    const usageMonth = getCurrentMonthKey();
+    const consumed = await entitlementDb.consumeWorkspaceEntitlement({
+      workspaceId: sequence.workspace_id,
+      tier: workspaceTier,
+      usageMonth,
+      feature: "sends",
+      limits,
+    });
+    if (!consumed.allowed) {
+      logEvent("warn", "sequence_send_limit_reached", {
+        workspaceId: sequence.workspace_id,
+        tier: workspaceTier,
+        sendsUsed: consumed.usage.sends,
+        monthlySends: limits.sends,
+      });
+      stats.skipped++;
+      return;
+    }
+  }
 
   // Finde den aktuellen Step
   const currentStep = steps.find(

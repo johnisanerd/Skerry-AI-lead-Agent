@@ -4,6 +4,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { RouterProvider } from "@tanstack/react-router";
 import { getRouter } from "./router";
+import { BrandProvider } from "./contexts/BrandContext";
 
 const router = getRouter();
 
@@ -11,10 +12,12 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="system" switchable>
-        <TooltipProvider>
-          <Toaster />
-          <RouterProvider router={router} />
-        </TooltipProvider>
+        <BrandProvider>
+          <TooltipProvider>
+            <Toaster />
+            <RouterProvider router={router} />
+          </TooltipProvider>
+        </BrandProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

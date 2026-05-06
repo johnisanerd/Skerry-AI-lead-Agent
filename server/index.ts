@@ -63,6 +63,8 @@ import {
   hasDeletionRequest,
 } from "./pipeline/gdprService.js";
 import { startGdprProcessor } from "./jobs/gdprProcessor.js";
+import { enrichLead } from "./pipeline/enrichmentService.js";
+import { calculateIntentScore } from "./pipeline/intentScorer.js";
 import { logEvent, makeRequestId } from "./lib/logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -110,6 +112,7 @@ interface GenerateEmailBody {
 
 type AccountTier = "solo" | "team" | "agency";
 type UserRole = "user" | "developer";
+type WorkspaceRole = "owner" | "admin" | "member" | "viewer";
 
 interface AuthSessionUser {
   id: string;
@@ -127,6 +130,7 @@ interface SessionPayload {
 interface RequestContext {
   requestId: string;
   workspaceId?: string;
+  workspaceRole?: WorkspaceRole;
 }
 
 interface RequestWithContext extends express.Request {
@@ -214,13 +218,10 @@ const DEMO_USERS: Record<string, { password: string; user: AuthSessionUser }> =
   };
 
 const loginAttempts = new Map<string, { count: number; firstAt: number }>();
-const TIER_LIMITS: Record<
-  AccountTier,
-  { monthlyRuns: number; maxLeadsPerRun: number }
-> = {
-  solo: { monthlyRuns: 50, maxLeadsPerRun: 5 },
-  team: { monthlyRuns: 250, maxLeadsPerRun: 20 },
-  agency: { monthlyRuns: 1000, maxLeadsPerRun: 50 },
+const TIER_LIMITS: Record<AccountTier, { monthlyRuns: number; maxLeadsPerRun: number; leads: number; seats: number; workspaces: number; exports: number; sends: number; apiCalls: number }> = {
+  solo: { monthlyRuns: 50, maxLeadsPerRun: 5, leads: 100, seats: 1, workspaces: 1, exports: 10, sends: 50, apiCalls: 1000 },
+  team: { monthlyRuns: 250, maxLeadsPerRun: 20, leads: 1000, seats: 5, workspaces: 3, exports: 100, sends: 500, apiCalls: 10000 },
+  agency: { monthlyRuns: 1000, maxLeadsPerRun: 50, leads: -1, seats: 20, workspaces: 10, exports: -1, sends: -1, apiCalls: -1 },
 };
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
 const PROVIDER_TIMEOUT_MS = Number(process.env.PROVIDER_TIMEOUT_MS ?? 12000);
@@ -288,6 +289,10 @@ async function assertWorkspaceAccess(
     if (workspaceId !== "demo-workspace") {
       throw httpError(403, "Workspace access denied.");
     }
+    const role = process.env.DEMO_WORKSPACE_ROLE;
+    if (role === "owner" || role === "admin" || role === "member" || role === "viewer") {
+      return { role };
+    }
     return { role: "owner" };
   }
   const uuidSchema = z.string().uuid();
@@ -302,6 +307,34 @@ async function assertWorkspaceAccess(
   return membership;
 }
 
+function normalizeWorkspaceRole(role: string | undefined): WorkspaceRole {
+  if (role === "owner") return "owner";
+  if (role === "admin") return "admin";
+  if (role === "member") return "member";
+  return "viewer";
+}
+
+const WORKSPACE_ROLE_RANK: Record<WorkspaceRole, number> = {
+  viewer: 0,
+  member: 1,
+  admin: 2,
+  owner: 3,
+};
+
+function workspaceRoleAtLeast(
+  actual: WorkspaceRole,
+  required: WorkspaceRole
+): boolean {
+  return WORKSPACE_ROLE_RANK[actual] >= WORKSPACE_ROLE_RANK[required];
+}
+
+function requireWorkspaceRole(req: express.Request, required: WorkspaceRole): void {
+  const role = (req as RequestWithContext).ctx?.workspaceRole;
+  if (!role || !workspaceRoleAtLeast(role, required)) {
+    throw httpError(403, "Insufficient workspace permissions.");
+  }
+}
+
 async function resolveWorkspaceId(
   req: express.Request,
   user: AuthSessionUser
@@ -309,31 +342,42 @@ async function resolveWorkspaceId(
   const requestId = getRequestId(req);
   const candidate = readWorkspaceIdFromRequest(req);
   if (candidate) {
-    await assertWorkspaceAccess(req, user, candidate);
+    const membership = await assertWorkspaceAccess(req, user, candidate);
     (req as RequestWithContext).ctx = {
       requestId,
       workspaceId: candidate,
+      workspaceRole: normalizeWorkspaceRole(membership.role),
     };
     return candidate;
   }
   if (!admin) {
     const fallback = "demo-workspace";
-    (req as RequestWithContext).ctx = { requestId, workspaceId: fallback };
+    const role = normalizeWorkspaceRole(process.env.DEMO_WORKSPACE_ROLE);
+    (req as RequestWithContext).ctx = {
+      requestId,
+      workspaceId: fallback,
+      workspaceRole: role,
+    };
     return fallback;
   }
-  const { data, error } = await admin
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_email", user.email)
-    .limit(1);
-  if (error) throw error;
-  const id = (data?.[0] as { workspace_id?: string } | undefined)?.workspace_id;
-  if (!id) {
-    throw httpError(403, "Workspace access denied.");
-  }
-  await assertWorkspaceAccess(req, user, id);
-  (req as RequestWithContext).ctx = { requestId, workspaceId: id };
-  return id;
+  throw httpError(400, "workspaceId is required.");
+}
+
+async function assertWorkspaceAccessWithContext(
+  req: express.Request,
+  user: AuthSessionUser,
+  workspaceId: string
+): Promise<WorkspaceRole> {
+  const membership = await assertWorkspaceAccess(req, user, workspaceId);
+  const role = normalizeWorkspaceRole(membership.role);
+  const prev = (req as RequestWithContext).ctx;
+  const requestId = prev?.requestId ?? getRequestId(req);
+  (req as RequestWithContext).ctx = {
+    requestId,
+    workspaceId,
+    workspaceRole: role,
+  };
+  return role;
 }
 
 async function assertWorkspaceOwner(
@@ -341,11 +385,8 @@ async function assertWorkspaceOwner(
   user: AuthSessionUser,
   workspaceId: string
 ): Promise<void> {
-  if (user.role === "developer") return;
-  const membership = await assertWorkspaceAccess(req, user, workspaceId);
-  if (membership.role !== "owner") {
-    throw httpError(403, "Workspace owner role required.");
-  }
+  await assertWorkspaceAccessWithContext(req, user, workspaceId);
+  requireWorkspaceRole(req, "owner");
 }
 
 function asyncHandler(
@@ -472,6 +513,16 @@ function getSessionUser(req: express.Request): AuthSessionUser | null {
 function getCurrentMonthKey(): string {
   const now = new Date();
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+async function getWorkspaceTier(workspaceId: string): Promise<AccountTier> {
+  if (!admin) return "solo";
+  const { data } = await admin
+    .from("workspaces")
+    .select("plan_tier")
+    .eq("id", workspaceId)
+    .single();
+  return (data?.plan_tier as AccountTier) ?? "solo";
 }
 
 function createCsrfToken(): string {
@@ -906,7 +957,10 @@ export async function buildApp(): Promise<express.Express> {
       res.setHeader("Access-Control-Allow-Origin", "*");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-CSRF-Token");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type,X-CSRF-Token,X-Workspace-Id,X-Request-Id"
+    );
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
   });
@@ -1123,9 +1177,17 @@ export async function buildApp(): Promise<express.Express> {
 
           if (memberError) throw memberError;
 
-          // Extract workspace data from memberships
           const workspaces =
-            memberships?.map(m => m.workspaces).filter(Boolean) || [];
+            memberships
+              ?.map(m => {
+                const workspace = (m as any).workspaces;
+                if (!workspace) return null;
+                return {
+                  ...workspace,
+                  role: normalizeWorkspaceRole((m as any).role),
+                };
+              })
+              .filter(Boolean) || [];
           return res.json({ ok: true, workspaces });
         } catch (err) {
           logEvent("error", "workspaces_fetch_failed", {
@@ -1139,6 +1201,7 @@ export async function buildApp(): Promise<express.Express> {
       }
 
       // Fallback: return demo workspace
+      const role = normalizeWorkspaceRole(process.env.DEMO_WORKSPACE_ROLE);
       return res.json({
         ok: true,
         workspaces: [
@@ -1147,6 +1210,7 @@ export async function buildApp(): Promise<express.Express> {
             name: "Demo Workspace",
             plan_tier: user.tier,
             slug: "demo",
+            role,
           },
         ],
       });
@@ -1214,7 +1278,8 @@ export async function buildApp(): Promise<express.Express> {
         };
 
       const targetWorkspaceId = id;
-      await assertWorkspaceAccess(req, user, targetWorkspaceId);
+      await assertWorkspaceAccessWithContext(req, user, targetWorkspaceId);
+      requireWorkspaceRole(req, "admin");
 
       // If Supabase is configured, save ICP profile
       if (admin) {
@@ -1269,17 +1334,29 @@ export async function buildApp(): Promise<express.Express> {
           error: "DATABASE_URL is required for entitlements.",
         });
       }
+      const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "member");
       try {
-        const limits = TIER_LIMITS[user.tier];
+        const workspaceTier = await getWorkspaceTier(workspaceId);
+        const limits = TIER_LIMITS[workspaceTier];
         const usageMonth = getCurrentMonthKey();
-        const usage = await entitlementDb.getUsage(user.email, usageMonth);
+        const usage = await entitlementDb.getWorkspaceUsage(workspaceId, usageMonth);
         return res.json({
           ok: true,
-          tier: user.tier,
+          tier: workspaceTier,
           usageMonth,
-          runsUsed: usage.runsUsed,
-          monthlyRuns: limits.monthlyRuns,
-          runsRemaining: Math.max(limits.monthlyRuns - usage.runsUsed, 0),
+          leadsUsed: usage.leads,
+          monthlyLeads: limits.leads,
+          leadsRemaining: limits.leads === -1 ? -1 : Math.max(limits.leads - usage.leads, 0),
+          exportsUsed: usage.exports,
+          monthlyExports: limits.exports,
+          exportsRemaining: limits.exports === -1 ? -1 : Math.max(limits.exports - usage.exports, 0),
+          sendsUsed: usage.sends,
+          monthlySends: limits.sends,
+          sendsRemaining: limits.sends === -1 ? -1 : Math.max(limits.sends - usage.sends, 0),
+          apiCallsUsed: usage.apiCalls,
+          monthlyApiCalls: limits.apiCalls,
+          apiCallsRemaining: limits.apiCalls === -1 ? -1 : Math.max(limits.apiCalls - usage.apiCalls, 0),
           maxLeadsPerRun: limits.maxLeadsPerRun,
         });
       } catch (err) {
@@ -1303,13 +1380,18 @@ export async function buildApp(): Promise<express.Express> {
           .status(401)
           .json({ ok: false, error: "Authentication required" });
       }
+      await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "member");
       const parsed = entitlementStartSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
         return res
           .status(400)
           .json({ ok: false, error: "Invalid entitlement payload." });
       }
-      const limits = TIER_LIMITS[user.tier];
+      const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "member");
+      const workspaceTier = await getWorkspaceTier(workspaceId);
+      const limits = TIER_LIMITS[workspaceTier];
       const { requestedLeads } = parsed.data as EntitlementStartBody;
       const requested = Math.max(
         1,
@@ -1330,24 +1412,24 @@ export async function buildApp(): Promise<express.Express> {
       }
       try {
         const usageMonth = getCurrentMonthKey();
-        const usage = await entitlementDb.getUsage(user.email, usageMonth);
-        if (usage.runsUsed >= limits.monthlyRuns) {
+        const usage = await entitlementDb.getWorkspaceUsage(workspaceId, usageMonth);
+        if (limits.leads !== -1 && usage.leads + requested > limits.leads) {
           return res.status(403).json({
             ok: false,
             error:
-              "Monthly run limit reached. Upgrade plan or wait for next month.",
-            tier: user.tier,
-            runsUsed: usage.runsUsed,
-            monthlyRuns: limits.monthlyRuns,
+              "Monthly lead limit reached. Upgrade plan or wait for next month.",
+            tier: workspaceTier,
+            leadsUsed: usage.leads,
+            monthlyLeads: limits.leads,
           });
         }
         return res.json({
           ok: true,
-          tier: user.tier,
+          tier: workspaceTier,
           usageMonth,
-          runsUsed: usage.runsUsed,
-          monthlyRuns: limits.monthlyRuns,
-          runsRemaining: Math.max(limits.monthlyRuns - usage.runsUsed, 0),
+          leadsUsed: usage.leads,
+          monthlyLeads: limits.leads,
+          leadsRemaining: limits.leads === -1 ? -1 : Math.max(limits.leads - usage.leads, 0),
           maxLeadsPerRun: limits.maxLeadsPerRun,
           requestedLeads: requested,
         });
@@ -1373,31 +1455,17 @@ export async function buildApp(): Promise<express.Express> {
           .status(401)
           .json({ ok: false, error: "Authentication required" });
       }
+      const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "member");
       if (!entitlementDb.isConfigured) {
         return res.status(503).json({
           ok: false,
           error: "DATABASE_URL is required for entitlements.",
         });
       }
-      const limits = TIER_LIMITS[user.tier];
+      const workspaceTier = await getWorkspaceTier(workspaceId);
+      const limits = TIER_LIMITS[workspaceTier];
       const usageMonth = getCurrentMonthKey();
-      const consumed = await entitlementDb.consumeRun({
-        email: user.email,
-        tier: user.tier,
-        usageMonth,
-        monthlyRunsLimit: limits.monthlyRuns,
-      });
-      if (!consumed.allowed) {
-        return res.status(403).json({
-          ok: false,
-          error:
-            "Monthly run limit reached. Upgrade plan or wait for next month.",
-          tier: user.tier,
-          runsUsed: consumed.runsUsed,
-          monthlyRuns: limits.monthlyRuns,
-        });
-      }
-
       const parsed = generateLeadsSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
         return res
@@ -1410,6 +1478,24 @@ export async function buildApp(): Promise<express.Express> {
         Number(body.requestedLeads ?? limits.maxLeadsPerRun)
       );
       const count = Math.min(requested, limits.maxLeadsPerRun);
+      const consumed = await entitlementDb.consumeWorkspaceEntitlements({
+        workspaceId,
+        tier: workspaceTier,
+        usageMonth,
+        feature: "leads",
+        amount: count,
+        limits,
+      });
+      if (!consumed.allowed) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "Monthly lead limit reached. Upgrade plan or wait for next month.",
+          tier: workspaceTier,
+          leadsUsed: consumed.usage.leads,
+          monthlyLeads: limits.leads,
+        });
+      }
       const businessDescription = (
         body.businessDescription ?? "B2B SaaS"
       ).trim();
@@ -1505,17 +1591,169 @@ export async function buildApp(): Promise<express.Express> {
         });
       }
 
+      await logAudit({
+        workspaceId,
+        userId: user.id,
+        action: "lead.discovery_completed",
+        resourceType: "lead",
+        metadata: {
+          source,
+          count: leads.length,
+        },
+      });
+
       return res.json({
         ok: true,
         source,
         leads,
-        tier: user.tier,
+        tier: workspaceTier,
         usageMonth,
-        runsUsed: consumed.runsUsed,
-        monthlyRuns: limits.monthlyRuns,
-        runsRemaining: Math.max(limits.monthlyRuns - consumed.runsUsed, 0),
+        leadsUsed: consumed.usage.leads,
+        monthlyLeads: limits.leads,
+        leadsRemaining: limits.leads === -1 ? -1 : Math.max(limits.leads - consumed.usage.leads, 0),
         maxLeadsPerRun: limits.maxLeadsPerRun,
       });
+    })
+  );
+
+  // ──────────── /api/leads/enrich
+  app.post(
+    "/api/leads/enrich",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      const { leadIds } = req.body as { leadIds: string[] };
+      if (!Array.isArray(leadIds) || leadIds.length === 0) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "leadIds array required" });
+      }
+
+      try {
+        const targetWorkspaceId = await resolveWorkspaceId(req, user);
+        requireWorkspaceRole(req, "member");
+
+        if (!entitlementDb.isConfigured) {
+          return res.status(503).json({
+            ok: false,
+            error: "DATABASE_URL is required for entitlements.",
+          });
+        }
+
+        const workspaceTier = await getWorkspaceTier(targetWorkspaceId);
+        const limits = TIER_LIMITS[workspaceTier];
+        const usageMonth = getCurrentMonthKey();
+
+        // Get limits and consume apiCalls
+        const currentUsage = await entitlementDb.getWorkspaceUsage(targetWorkspaceId, usageMonth);
+        const consumed = await entitlementDb.consumeWorkspaceEntitlements({
+          workspaceId: targetWorkspaceId,
+          tier: workspaceTier,
+          usageMonth,
+          feature: "apiCalls",
+          amount: leadIds.length,
+          limits,
+        });
+        if (!consumed.allowed) {
+          return res.status(403).json({
+            ok: false,
+            error: "Monthly API call limit reached. Upgrade plan or wait for next month.",
+            tier: workspaceTier,
+            apiCallsUsed: currentUsage.apiCalls,
+            monthlyApiCalls: limits.apiCalls,
+          });
+        }
+
+        if (!admin) {
+          return res.json({
+            ok: true,
+            enriched: false,
+            reason: "no_db",
+          });
+        }
+
+        // Fetch leads from DB
+        const { data: leads, error } = await admin
+          .from("leads")
+          .select("*")
+          .in("id", leadIds)
+          .eq("workspace_id", targetWorkspaceId);
+
+        if (error || !leads) {
+          return res.status(500).json({ ok: false, error: "Failed to fetch leads" });
+        }
+
+        const enrichedLeads = [];
+
+        for (const lead of leads) {
+          const leadData = {
+            id: lead.id,
+            personal: {
+              firstName: lead.first_name,
+              lastName: lead.last_name,
+              title: lead.title,
+              email: lead.email,
+            },
+            organization: {
+              name: lead.company_name,
+              domain: lead.company_website,
+            },
+          };
+
+          const enriched = await enrichLead(leadData);
+          const intentScore = calculateIntentScore([]); // Initial: no events, score 0
+
+          // Update DB
+          const { error: updateError } = await admin
+            .from("leads")
+            .update({
+              enriched_data: enriched,
+              intent_score: intentScore,
+            })
+            .eq("id", lead.id)
+            .eq("workspace_id", targetWorkspaceId);
+
+          if (updateError) {
+            console.error("Failed to update lead:", updateError);
+            continue;
+          }
+
+          enrichedLeads.push({
+            id: lead.id,
+            enriched,
+            intentScore,
+          });
+        }
+
+        await logAudit({
+          workspaceId: targetWorkspaceId,
+          userId: user.id,
+          action: "lead.enriched",
+          resourceType: "lead",
+          metadata: {
+            count: enrichedLeads.length,
+          },
+        });
+
+        return res.json({
+          ok: true,
+          enriched: enrichedLeads,
+          tier: workspaceTier,
+          usageMonth,
+          apiCallsUsed: consumed.usage.apiCalls,
+          monthlyApiCalls: limits.apiCalls,
+          apiCallsRemaining: limits.apiCalls === -1 ? -1 : Math.max(limits.apiCalls - consumed.usage.apiCalls, 0),
+        });
+      } catch (err) {
+        console.error("Enrichment error:", err);
+        return res.status(500).json({ ok: false, error: "Enrichment failed" });
+      }
     })
   );
 
@@ -1533,16 +1771,16 @@ export async function buildApp(): Promise<express.Express> {
 
       const { leads } = req.body as { leads: any[] };
 
-      if (!admin) {
-        return res.json({
-          ok: true,
-          persisted: false,
-          reason: "no_db",
-        });
-      }
-
       try {
         const targetWorkspaceId = await resolveWorkspaceId(req, user);
+        requireWorkspaceRole(req, "member");
+        if (!admin) {
+          return res.json({
+            ok: true,
+            persisted: false,
+            reason: "no_db",
+          });
+        }
         const leadsToInsert = leads.map(lead => ({
           workspace_id: targetWorkspaceId,
           first_name: lead.firstName || lead.personal?.firstName,
@@ -1559,6 +1797,7 @@ export async function buildApp(): Promise<express.Express> {
           unique_angles: lead.uniqueAngles || lead.extraction?.uniqueAngles,
           newsletter_body: lead.newsletter?.body,
           stage: lead.stage || "source",
+          intent_score: 0,
           created_at: new Date().toISOString(),
         }));
 
@@ -1762,6 +2001,12 @@ export async function buildApp(): Promise<express.Express> {
     "/api/billing/checkout",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
       const stripeKey = process.env.STRIPE_SECRET_KEY;
       if (!stripeKey) {
         return res.status(503).json({
@@ -1771,6 +2016,20 @@ export async function buildApp(): Promise<express.Express> {
         });
       }
       const { priceId } = req.body as { priceId: string };
+      const allowedPriceIds = [
+        process.env.STRIPE_PRICE_SOLO,
+        process.env.STRIPE_PRICE_TEAM,
+        process.env.STRIPE_PRICE_AGENCY,
+      ].filter((v): v is string => Boolean(v));
+      if (!allowedPriceIds.includes(priceId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid priceId.",
+        });
+      }
+
+      const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "owner");
       const { default: Stripe } = await import("stripe");
       const stripe = new Stripe(stripeKey);
       const session = await stripe.checkout.sessions.create({
@@ -1778,6 +2037,25 @@ export async function buildApp(): Promise<express.Express> {
         line_items: [{ price: priceId, quantity: 1 }],
         success_url: `${process.env.PUBLIC_APP_URL ?? "http://localhost:3000"}/billing?success=1`,
         cancel_url: `${process.env.PUBLIC_APP_URL ?? "http://localhost:3000"}/billing`,
+        metadata: {
+          workspace_id: workspaceId,
+          user_id: user.id,
+        },
+        subscription_data: {
+          metadata: {
+            workspace_id: workspaceId,
+          },
+        },
+      });
+      await logAudit({
+        workspaceId,
+        userId: user.id,
+        action: "billing.checkout_started",
+        resourceType: "billing",
+        metadata: {
+          priceId,
+          stripeSessionId: session.id,
+        },
       });
       return res.json({ ok: true, url: session.url });
     })
@@ -1818,28 +2096,31 @@ export async function buildApp(): Promise<express.Express> {
           const customerId = session.customer;
           const subscriptionId = session.subscription;
 
-          if (admin && workspaceId && customerId && subscriptionId) {
-            // Update workspace with subscription info
-            await admin
-              .from("workspaces")
-              .update({
-                stripe_customer_id: customerId,
-                stripe_subscription_id: subscriptionId,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", workspaceId);
+          if (workspaceId && !(await entitlementDb.isWebhookProcessed(event.id, workspaceId))) {
+            if (admin && customerId && subscriptionId) {
+              // Update workspace with subscription info
+              await admin
+                .from("workspaces")
+                .update({
+                  stripe_customer_id: customerId,
+                  stripe_subscription_id: subscriptionId,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", workspaceId);
 
-            // Determine plan tier from price ID
-            const priceId = session.display_items?.[0]?.price?.id;
-            let planTier = "solo";
-            if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = "team";
-            if (priceId === process.env.STRIPE_PRICE_AGENCY)
-              planTier = "agency";
+              // Determine plan tier from price ID
+              const priceId = session.display_items?.[0]?.price?.id;
+              let planTier = "solo";
+              if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = "team";
+              if (priceId === process.env.STRIPE_PRICE_AGENCY)
+                planTier = "agency";
 
-            await admin
-              .from("workspaces")
-              .update({ plan_tier: planTier })
-              .eq("id", workspaceId);
+              await admin
+                .from("workspaces")
+                .update({ plan_tier: planTier })
+                .eq("id", workspaceId);
+            }
+            await entitlementDb.recordWebhookProcessed(event.id, workspaceId, event.type, event.data.object);
           }
           break;
         }
@@ -1848,17 +2129,20 @@ export async function buildApp(): Promise<express.Express> {
           const subscription = event.data.object as any;
           const workspaceId = subscription.metadata?.workspace_id;
 
-          if (admin && workspaceId) {
-            let planTier = "solo";
-            const priceId = subscription.items.data[0]?.price?.id;
-            if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = "team";
-            if (priceId === process.env.STRIPE_PRICE_AGENCY)
-              planTier = "agency";
+          if (workspaceId && !(await entitlementDb.isWebhookProcessed(event.id, workspaceId))) {
+            if (admin) {
+              let planTier = "solo";
+              const priceId = subscription.items.data[0]?.price?.id;
+              if (priceId === process.env.STRIPE_PRICE_TEAM) planTier = "team";
+              if (priceId === process.env.STRIPE_PRICE_AGENCY)
+                planTier = "agency";
 
-            await admin
-              .from("workspaces")
-              .update({ plan_tier: planTier })
-              .eq("id", workspaceId);
+              await admin
+                .from("workspaces")
+                .update({ plan_tier: planTier })
+                .eq("id", workspaceId);
+            }
+            await entitlementDb.recordWebhookProcessed(event.id, workspaceId, event.type, event.data.object);
           }
           break;
         }
@@ -1867,15 +2151,18 @@ export async function buildApp(): Promise<express.Express> {
           const subscription = event.data.object as any;
           const workspaceId = subscription.metadata?.workspace_id;
 
-          if (admin && workspaceId) {
-            await admin
-              .from("workspaces")
-              .update({
-                plan_tier: "solo",
-                stripe_subscription_id: null,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", workspaceId);
+          if (workspaceId && !(await entitlementDb.isWebhookProcessed(event.id, workspaceId))) {
+            if (admin) {
+              await admin
+                .from("workspaces")
+                .update({
+                  plan_tier: "solo",
+                  stripe_subscription_id: null,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", workspaceId);
+            }
+            await entitlementDb.recordWebhookProcessed(event.id, workspaceId, event.type, event.data.object);
           }
           break;
         }
@@ -1903,6 +2190,7 @@ export async function buildApp(): Promise<express.Express> {
       };
 
       const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "admin");
 
       if (!admin) {
         return res.json({ ok: true, fallback: "no_db", sequence: null });
@@ -1991,6 +2279,8 @@ export async function buildApp(): Promise<express.Express> {
       const { id } = req.params as { id: string };
       const { leadId } = req.body as { leadId: string };
 
+      await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "admin");
       if (!admin) {
         return res.json({ ok: true, fallback: "no_db" });
       }
@@ -2009,7 +2299,8 @@ export async function buildApp(): Promise<express.Express> {
             .json({ ok: false, error: "Sequence not found" });
         }
 
-        await assertWorkspaceAccess(req, user, sequence.workspace_id);
+        await assertWorkspaceAccessWithContext(req, user, sequence.workspace_id);
+        requireWorkspaceRole(req, "admin");
         const { data: leadRow, error: leadError } = await admin
           .from("leads")
           .select("workspace_id")
@@ -2070,6 +2361,8 @@ export async function buildApp(): Promise<express.Express> {
 
       const { id, leadId } = req.params as { id: string; leadId: string };
 
+      await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "admin");
       if (!admin) {
         return res.json({ ok: true, fallback: "no_db" });
       }
@@ -2086,7 +2379,8 @@ export async function buildApp(): Promise<express.Express> {
             .status(404)
             .json({ ok: false, error: "Enrollment not found" });
         }
-        await assertWorkspaceAccess(req, user, enrollment.workspace_id);
+        await assertWorkspaceAccessWithContext(req, user, enrollment.workspace_id);
+        requireWorkspaceRole(req, "admin");
         const { error } = await admin
           .from("sequence_enrollments")
           .delete()
@@ -2129,6 +2423,7 @@ export async function buildApp(): Promise<express.Express> {
       };
 
       const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "admin");
 
       if (!admin) {
         return res.json({ ok: true, fallback: "no_db", abTestId: null });
@@ -2175,12 +2470,12 @@ export async function buildApp(): Promise<express.Express> {
 
       const { id } = req.params as { id: string };
 
-      if (!admin) {
-        return res.json({ ok: true, results: [], hasEnoughData: false });
-      }
-
       try {
         const workspaceId = await resolveWorkspaceId(req, user);
+        requireWorkspaceRole(req, "admin");
+        if (!admin) {
+          return res.json({ ok: true, results: [], hasEnoughData: false });
+        }
         const { data: abTestRow, error: abTestError } = await admin
           .from("ab_tests")
           .select("workspace_id")
@@ -2251,12 +2546,12 @@ export async function buildApp(): Promise<express.Express> {
       const { id } = req.params as { id: string };
       const { winnerVariantId } = req.body as { winnerVariantId: string };
 
-      if (!admin) {
-        return res.json({ ok: true, fallback: "no_db" });
-      }
-
       try {
         const workspaceId = await resolveWorkspaceId(req, user);
+        requireWorkspaceRole(req, "admin");
+        if (!admin) {
+          return res.json({ ok: true, fallback: "no_db" });
+        }
         const { data: abTestRow, error: abTestError } = await admin
           .from("ab_tests")
           .select("workspace_id")
@@ -2312,7 +2607,37 @@ export async function buildApp(): Promise<express.Express> {
       const targetWorkspaceId = workspaceId
         ? workspaceId
         : await resolveWorkspaceId(req, user);
-      await assertWorkspaceAccess(req, user, targetWorkspaceId);
+      if (workspaceId) {
+        await assertWorkspaceAccessWithContext(req, user, targetWorkspaceId);
+      }
+      requireWorkspaceRole(req, "member");
+
+      if (!entitlementDb.isConfigured) {
+        return res.status(503).json({
+          ok: false,
+          error: "DATABASE_URL is required for entitlements.",
+        });
+      }
+      const workspaceTier = await getWorkspaceTier(targetWorkspaceId);
+      const limits = TIER_LIMITS[workspaceTier];
+      const usageMonth = getCurrentMonthKey();
+      const consumed = await entitlementDb.consumeWorkspaceEntitlement({
+        workspaceId: targetWorkspaceId,
+        tier: workspaceTier,
+        usageMonth,
+        feature: "exports",
+        limits,
+      });
+      if (!consumed.allowed) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "Monthly export limit reached. Upgrade plan or wait for next month.",
+          tier: workspaceTier,
+          exportsUsed: consumed.usage.exports,
+          monthlyExports: limits.exports,
+        });
+      }
 
       if (!admin) {
         return res
@@ -2392,6 +2717,7 @@ export async function buildApp(): Promise<express.Express> {
       };
 
       const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "admin");
 
       if (!admin) {
         return res.json({ ok: true, logs: [] });
@@ -2436,6 +2762,7 @@ export async function buildApp(): Promise<express.Express> {
       };
 
       const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "admin");
 
       if (!admin) {
         return res
@@ -2520,6 +2847,7 @@ export async function buildApp(): Promise<express.Express> {
 
       const { id } = req.params as { id: string };
       const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "member");
 
       if (!admin) {
         return res.status(503).json({
@@ -2624,7 +2952,8 @@ export async function buildApp(): Promise<express.Express> {
       }
 
       const { id } = req.params as { id: string };
-      await assertWorkspaceAccess(req, user, id);
+      await assertWorkspaceAccessWithContext(req, user, id);
+      requireWorkspaceRole(req, "owner");
 
       if (!admin) {
         return res
@@ -2795,6 +3124,177 @@ export async function buildApp(): Promise<express.Express> {
     })
   );
 
+  // ──────────── /api/workspaces/:id/brand (update endpoint)
+  app.put(
+    "/api/workspaces/:id/brand",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      const { id } = req.params as { id: string };
+      const { brandName, brandLogoUrl, brandPrimaryColor, customDomain, fromEmail } = req.body as {
+        brandName?: string;
+        brandLogoUrl?: string;
+        brandPrimaryColor?: string;
+        customDomain?: string;
+        fromEmail?: string;
+      };
+
+      await assertWorkspaceAccessWithContext(req, user, id);
+      requireWorkspaceRole(req, "owner");
+
+      if (!admin) {
+        return res.json({ ok: true, fallback: "no_db" });
+      }
+
+      try {
+        const { data, error } = await admin
+          .from("workspaces")
+          .update({
+            brand_name: brandName,
+            brand_logo_url: brandLogoUrl,
+            brand_primary_color: brandPrimaryColor,
+            custom_domain: customDomain,
+            from_email: fromEmail,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", id)
+          .select("brand_name, brand_logo_url, brand_primary_color, custom_domain, from_email")
+          .single();
+
+        if (error) throw error;
+
+        return res.json({
+          ok: true,
+          brand: {
+            brand_name: data.brand_name,
+            brand_logo_url: data.brand_logo_url,
+            brand_primary_color: data.brand_primary_color,
+            custom_domain: data.custom_domain,
+            from_email: data.from_email,
+          },
+        });
+      } catch (err) {
+        logEvent("error", "brand_update_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          workspaceId: id,
+          error: String(err),
+        });
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to update brand settings",
+        });
+      }
+    })
+  );
+
+  // ──────────── /api/gdpr/deletion-request
+  app.post(
+    "/api/gdpr/deletion-request",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      const { leadId, requestSource = "user_request" } = req.body as {
+        leadId: string;
+        requestSource?: "user_request" | "bounce" | "complaint";
+      };
+
+      if (!leadId) {
+        return res.status(400).json({ ok: false, error: "leadId required" });
+      }
+
+      const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "member");
+
+      if (!admin) {
+        return res.json({ ok: true, fallback: "no_db" });
+      }
+
+      try {
+        const requestId = await createDeletionRequest({
+          workspaceId,
+          leadId,
+          userEmail: user.email,
+          requestSource,
+        });
+
+        return res.json({
+          ok: true,
+          requestId,
+          message: "Deletion request created. Data will be deleted within 30 days.",
+        });
+      } catch (err) {
+        logEvent("error", "gdpr_deletion_request_api_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          workspaceId,
+          leadId,
+          error: String(err),
+        });
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to create deletion request",
+        });
+      }
+    })
+  );
+
+  // ──────────── /api/gdpr/data-export
+  app.get(
+    "/api/gdpr/data-export",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+
+      const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "member");
+
+      if (!admin) {
+        return res
+          .status(503)
+          .json({ ok: false, error: "GDPR features not available without database" });
+      }
+
+      try {
+        const data = await exportWorkspaceData(workspaceId);
+
+        // Set headers for file download
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="skerry-gdpr-export-${workspaceId}-${new Date().toISOString().split("T")[0]}.json"`
+        );
+        res.send(JSON.stringify(data, null, 2));
+      } catch (err) {
+        logEvent("error", "gdpr_data_export_api_failed", {
+          requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
+          workspaceId,
+          userId: user.id,
+          error: String(err),
+        });
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to export data",
+        });
+      }
+    })
+  );
+
   // ──────────── /api/webhooks/resend
   app.post(
     "/api/webhooks/resend",
@@ -2841,6 +3341,14 @@ export async function buildApp(): Promise<express.Express> {
     "/api/email/verify",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+      await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "member");
       const parsed = verifyEmailSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
         return res.status(400).json({ ok: false, error: "email required" });
@@ -2896,6 +3404,14 @@ export async function buildApp(): Promise<express.Express> {
     "/api/email/send",
     requireAuth,
     asyncHandler(async (req, res) => {
+      const user = getSessionUser(req);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "Authentication required" });
+      }
+      const workspaceId = await resolveWorkspaceId(req, user);
+      requireWorkspaceRole(req, "member");
       const parsed = sendEmailSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
         return res
@@ -2909,12 +3425,12 @@ export async function buildApp(): Promise<express.Express> {
       const { subject: parsedSubject, body } =
         extractSubjectAndBody(bodyMarkdown);
       const finalSubject = subject || parsedSubject;
+      const toDomain = to.includes("@") ? to.split("@").slice(-1)[0] : "";
 
       if (!resendKey) {
         logEvent("info", "email_send_dry_run", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
-          to,
-          subject: finalSubject,
+          toDomain,
         });
         return res.json({ ok: true, dryRun: true, id: `dryrun_${Date.now()}` });
       }
@@ -2949,11 +3465,30 @@ export async function buildApp(): Promise<express.Express> {
             .status(502)
             .json({ ok: false, error: json.message ?? "send failed" });
         }
+        await logAudit({
+          workspaceId,
+          userId: user.id,
+          action: "email.sent",
+          resourceType: "email",
+          metadata: {
+            toDomain,
+            messageId: json.id,
+          },
+        });
         return res.json({ ok: true, id: json.id });
       } catch (err) {
         logEvent("error", "email_send_failed", {
           requestId: (req as RequestWithContext).ctx?.requestId ?? "unknown",
           error: String(err),
+        });
+        await logAudit({
+          workspaceId,
+          userId: user.id,
+          action: "email.failed",
+          resourceType: "email",
+          metadata: {
+            toDomain,
+          },
         });
         return res.status(502).json({ ok: false, error: clientSafeError(err) });
       }

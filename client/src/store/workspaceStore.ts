@@ -6,6 +6,7 @@ interface Workspace {
   name: string;
   plan_tier: string;
   slug: string;
+  role?: "owner" | "admin" | "member" | "viewer";
 }
 
 interface WorkspaceStore {

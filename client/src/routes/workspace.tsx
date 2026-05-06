@@ -21,6 +21,8 @@ import {
   GitBranch,
 } from "lucide-react";
 import { useLeadStore } from "@/store/leadStore";
+import { useLeadEnrichment } from "@/hooks/useLeadEnrichment";
+import { useGDPR } from "@/hooks/useGDPR";
 import { StepProgress } from "@/components/nexus/StepProgress";
 import { useT, type TranslationKey } from "@/lib/i18n";
 import { SequenceModal } from "@/components/nexus/SequenceModal";
@@ -54,6 +56,7 @@ type TabId = (typeof tabs)[number]["id"];
 
 function WorkspacePage() {
   const { leads, selectedId, select, pushToInstantly } = useLeadStore();
+  const { exportAllData, isLoading: isGdprLoading, requestLeadDeletion } = useGDPR();
   const lead = leads.find(l => l.id === selectedId) ?? leads[0];
   const t = useT();
 
@@ -84,38 +87,59 @@ function WorkspacePage() {
         <span className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
           {t("workspace.eyebrow")}
         </span>
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <h1 className="text-3xl font-semibold tracking-tight">
-            <span className="text-gradient-cyber">
-              {t("workspace.titleAccent")}
-            </span>{" "}
-            <span className="text-foreground/90">
-              {lead.personal.firstName} {lead.personal.lastName}
-            </span>
-          </h1>
-          <div className="flex flex-wrap gap-2">
-            {leads.map(l => {
-              const active = l.id === selectedId;
-              return (
-                <button
-                  key={l.id}
-                  onClick={() => select(l.id)}
-                  className={`group flex items-center gap-2 rounded-md px-3 py-1.5 text-xs ring-1 transition ${
-                    active
-                      ? "bg-white/10 text-foreground ring-purple-300/40"
-                      : "bg-white/5 text-muted-foreground ring-white/10 hover:text-foreground"
-                  }`}
-                >
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-purple-500/30 to-fuchsia-500/10 text-[10px] font-semibold text-purple-100 ring-1 ring-white/10">
-                    {l.personal.firstName[0]}
-                  </span>
-                  {l.personal.firstName} · {l.organization.name}
-                  {active && (
-                    <ChevronRight className="h-3 w-3 text-purple-300" />
-                  )}
-                </button>
-              );
-            })}
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <h1 className="text-3xl font-semibold tracking-tight">
+              <span className="text-gradient-cyber">
+                {t("workspace.titleAccent")}
+              </span>{" "}
+              <span className="text-foreground/90">
+                {lead.personal.firstName} {lead.personal.lastName}
+              </span>
+            </h1>
+            <div className="flex flex-wrap gap-2">
+              {leads.map(l => {
+                const active = l.id === selectedId;
+                return (
+                  <button
+                    key={l.id}
+                    onClick={() => select(l.id)}
+                    className={`group flex items-center gap-2 rounded-md px-3 py-1.5 text-xs ring-1 transition ${
+                      active
+                        ? "bg-white/10 text-foreground ring-purple-300/40"
+                        : "bg-white/5 text-muted-foreground ring-white/10 hover:text-foreground"
+                    }`}
+                  >
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-purple-500/30 to-fuchsia-500/10 text-[10px] font-semibold text-purple-100 ring-1 ring-white/10">
+                      {l.personal.firstName[0]}
+                    </span>
+                    {l.personal.firstName} · {l.organization.name}
+                    {active && (
+                      <ChevronRight className="h-3 w-3 text-purple-300" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => exportAllData()}
+              disabled={isGdprLoading}
+            >
+              Daten exportieren
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => requestLeadDeletion(lead.id)}
+              disabled={isGdprLoading}
+            >
+              Löschantrag stellen
+            </Button>
           </div>
         </div>
       </div>
@@ -162,6 +186,7 @@ function LeadCard({
   lead: ReturnType<typeof useLeadStore.getState>["leads"][number];
 }) {
   const hasEmail = !!lead.personal.email;
+  const { enrichSelectedLeads, isLoading: isEnrichLoading } = useLeadEnrichment();
   const t = useT();
   return (
     <motion.div
@@ -215,17 +240,33 @@ function LeadCard({
         />
       </div>
 
-      <div className="relative mt-5">
+      <div className="relative mt-5 space-y-3">
         {hasEmail ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-300/10 px-2.5 py-1 text-[10px] font-medium text-emerald-200 ring-1 ring-emerald-300/20">
             <ShieldCheck className="h-3 w-3" /> {t("workspace.verifiedEmail")}
           </span>
         ) : (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-300/10 px-2.5 py-1 text-[10px] font-medium text-amber-200 ring-1 ring-amber-300/20">
-            <AlertTriangle className="h-3 w-3" />{" "}
-            {t("workspace.missingContact")}
+            <AlertTriangle className="h-3 w-3" /> {t("workspace.missingContact")}
           </span>
         )}
+
+        {typeof lead.intentScore === "number" && (
+          <div className="flex items-center gap-2 rounded-full bg-slate-900/70 px-3 py-2 text-[11px] font-medium text-slate-200 ring-1 ring-slate-700">
+            <Target className="h-3.5 w-3.5 text-purple-300" />
+            Intent Score: {lead.intentScore.toFixed(2)}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            onClick={() => enrichSelectedLeads([lead.id])}
+            disabled={isEnrichLoading}
+          >
+            {isEnrichLoading ? "Anreichern…" : "Lead anreichern"}
+          </Button>
+        </div>
       </div>
     </motion.div>
   );
@@ -381,6 +422,29 @@ function IntelligenceCenter({
           )}
         </AnimatePresence>
       </div>
+
+      {lead.enriched && Object.keys(lead.enriched).length > 0 && (
+        <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-foreground/90">
+          <div className="mb-3 text-xs uppercase tracking-[0.22em] text-muted-foreground">
+            {t("workspace.enrichment.title") || "Enriched Insights"}
+          </div>
+          <div className="grid gap-2">
+            {Object.entries(lead.enriched).map(([key, value]) => (
+              <div
+                key={key}
+                className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-2"
+              >
+                <span className="text-muted-foreground">{key}</span>
+                <span className="font-medium text-foreground/90">
+                  {typeof value === "object"
+                    ? JSON.stringify(value)
+                    : String(value)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

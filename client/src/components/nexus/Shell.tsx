@@ -7,6 +7,7 @@ import { AppSidebar } from "./AppSidebar";
 import { Onboarding } from "./Onboarding";
 import { LoginPage } from "./LoginPage";
 import { FindLeadsModal } from "./FindLeadsModal";
+import { useBrand } from "@/contexts/BrandContext";
 import { useT } from "@/lib/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -72,6 +73,8 @@ export function Shell() {
     return <Onboarding onComplete={handleOnboardingComplete} />;
   }
 
+  const { brand, isLoading: isBrandLoading } = useBrand();
+
   const tierColors: Record<string, string> = {
     solo: "border-slate-500/30 text-slate-400 bg-slate-500/5",
     team: "border-blue-500/30 text-blue-400 bg-blue-500/5",
@@ -94,7 +97,10 @@ export function Shell() {
       <div className="relative z-10 flex min-h-screen w-full text-foreground">
         <AppSidebar />
         <div className="flex flex-1 flex-col">
-          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-white/5 bg-[#050505] px-5 text-white">
+          <header
+            className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-white/5 bg-[#050505] px-5 text-white"
+            style={brand?.brandPrimaryColor ? { borderColor: brand.brandPrimaryColor } : undefined}
+          >
             <div className="flex items-center gap-3">
               <SidebarTrigger className="text-white/70 hover:text-white" />
               <div className="hidden h-6 w-px bg-white/10 md:block" />
@@ -102,8 +108,15 @@ export function Shell() {
                 <span className="text-[10px] uppercase tracking-[0.22em] text-white/60">
                   {t("shell.eyebrow")}
                 </span>
-                <span className="text-xs font-medium text-white/90">
-                  {t("shell.title")}
+                <span className="flex items-center gap-2 text-xs font-medium text-white/90">
+                  {brand?.brandLogoUrl && (
+                    <img
+                      src={brand.brandLogoUrl}
+                      alt={brand.brandName}
+                      className="h-5 w-5 rounded-sm object-contain"
+                    />
+                  )}
+                  {brand?.brandName || t("shell.title")}
                 </span>
               </div>
             </div>

@@ -17,6 +17,7 @@ import { useResearchStore, TIER_CONFIGS } from "@/store/researchStore";
 import { useAccountTierStore, AccountTier } from "@/store/accountTierStore";
 import { useUsageStore } from "@/store/usageStore";
 import { useLeadStore } from "@/store/leadStore";
+import { useWorkspaceStore } from "@/store/workspaceStore";
 import {
   authorizeResearchStart,
   generateLeadsServer,
@@ -51,6 +52,10 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
   const recordResearchRun = useUsageStore(s => s.recordResearchRun);
   const config = TIER_CONFIGS[tier];
   const tierUsage = getTierUsage(tier);
+  const workspaceRole = useWorkspaceStore(
+    s => s.workspaces.find(w => w.id === s.currentId)?.role
+  );
+  const canRunInWorkspace = workspaceRole ? workspaceRole !== "viewer" : true;
 
   const [phase, setPhase] = useState<"confirm" | "running" | "done">("confirm");
 
@@ -324,13 +329,15 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
 
                     <Button
                       onClick={handleStart}
-                      disabled={!runGuard.allowed}
+                      disabled={!runGuard.allowed || !canRunInWorkspace}
                       className={`w-full h-11 bg-gradient-to-r ${tierColors[tier]} text-white font-semibold shadow-lg transition-all hover:scale-[1.01]`}
                     >
                       <Zap className="mr-2 h-4 w-4" />
-                      {runGuard.allowed
+                      {runGuard.allowed && canRunInWorkspace
                         ? `Start Research (${config.maxLeadsPerRun} leads max · est. $${estimatedRunCost.toFixed(2)})`
-                        : "Monthly run limit reached"}
+                        : !canRunInWorkspace
+                          ? "Insufficient workspace permissions"
+                          : "Monthly run limit reached"}
                     </Button>
                     {!runGuard.allowed && (
                       <p className="text-[11px] text-amber-400">

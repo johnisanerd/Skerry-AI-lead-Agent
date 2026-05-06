@@ -6,6 +6,21 @@
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
+function getWorkspaceHeader(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem("skerry-workspace");
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as { state?: { currentId?: unknown } };
+    const id = parsed.state?.currentId;
+    if (typeof id === "string" && id.trim()) {
+      return { "x-workspace-id": id.trim() };
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
 export type UserRole = "user" | "developer";
 export type AccountTier = "solo" | "team" | "agency";
 
@@ -96,7 +111,10 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const resp = await fetch(`${API_BASE}${path}`, { credentials: "include" });
+  const resp = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    headers: getWorkspaceHeader(),
+  });
   return resp.json() as Promise<T>;
 }
 
@@ -129,6 +147,7 @@ async function apiPostWithCsrf<T>(path: string, body: unknown): Promise<T> {
   }
   const requestHeaders: Record<string, string> = {
     "Content-Type": "application/json",
+    ...getWorkspaceHeader(),
   };
   if (csrfTokenCache) {
     requestHeaders["X-CSRF-Token"] = csrfTokenCache;
@@ -151,6 +170,50 @@ async function apiPostWithCsrf<T>(path: string, body: unknown): Promise<T> {
     if (fresh) {
       resp = await fetch(`${API_BASE}${path}`, {
         method: "POST",
+        headers: { ...requestHeaders, "X-CSRF-Token": fresh },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      json = (await resp.json()) as T;
+    }
+  }
+
+  const maybeCsrf = json as { csrfToken?: string };
+  if (maybeCsrf.csrfToken) {
+    csrfTokenCache = maybeCsrf.csrfToken;
+  }
+  return json;
+}
+
+async function apiPutWithCsrf<T>(path: string, body: unknown): Promise<T> {
+  if (!csrfTokenCache && path !== "/api/auth/login") {
+    await refreshCsrfToken();
+  }
+  const requestHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...getWorkspaceHeader(),
+  };
+  if (csrfTokenCache) {
+    requestHeaders["X-CSRF-Token"] = csrfTokenCache;
+  }
+
+  let resp = await fetch(`${API_BASE}${path}`, {
+    method: "PUT",
+    headers: requestHeaders,
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  let json = (await resp.json()) as T;
+
+  if (
+    resp.status === 403 &&
+    isCsrfFailure(json) &&
+    path !== "/api/auth/login"
+  ) {
+    const fresh = await refreshCsrfToken();
+    if (fresh) {
+      resp = await fetch(`${API_BASE}${path}`, {
+        method: "PUT",
         headers: { ...requestHeaders, "X-CSRF-Token": fresh },
         credentials: "include",
         body: JSON.stringify(body),
@@ -287,6 +350,138 @@ export async function generateEmailServer(args: {
 }): Promise<GenerateEmailResponse> {
   try {
     return await apiPost<GenerateEmailResponse>("/api/email/generate", args);
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+// ──────────── Lead Enrichment & Persistence
+export interface EnrichLeadResponse {
+  ok: boolean;
+  enriched?: Array<{
+    id: string;
+    enriched: Record<string, unknown>;
+    intentScore: number;
+  }>;
+  tier?: AccountTier;
+  usageMonth?: string;
+  apiCallsUsed?: number;
+  monthlyApiCalls?: number;
+  apiCallsRemaining?: number;
+  error?: string;
+}
+
+export async function enrichLeads(leadIds: string[]): Promise<EnrichLeadResponse> {
+  try {
+    return await apiPost<EnrichLeadResponse>("/api/leads/enrich", { leadIds });
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+interface PersistLeadsResponse {
+  ok: boolean;
+  persisted?: boolean;
+  count?: number;
+  error?: string;
+}
+
+export async function persistLeads(leads: ServerGeneratedLead[]): Promise<PersistLeadsResponse> {
+  try {
+    return await apiPost<PersistLeadsResponse>("/api/leads/persist", { leads });
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+// ──────────── Lead Export
+export interface ExportLeadsResponse {
+  ok: boolean;
+  content?: string;
+  error?: string;
+}
+
+export async function exportLeads(format: "csv" | "hubspot" | "salesforce" = "csv"): Promise<Blob | null> {
+  try {
+    const headers = getWorkspaceHeader();
+    const resp = await fetch(`${API_BASE}/api/leads/export?format=${format}`, {
+      credentials: "include",
+      headers,
+    });
+    if (!resp.ok) return null;
+    return await resp.blob();
+  } catch (err) {
+    console.error("Export failed:", err);
+    return null;
+  }
+}
+
+// ──────────── GDPR
+interface GDPRDeletionResponse {
+  ok: boolean;
+  requestId?: string;
+  message?: string;
+  error?: string;
+}
+
+export async function requestDataDeletion(leadId: string): Promise<GDPRDeletionResponse> {
+  try {
+    return await apiPost<GDPRDeletionResponse>("/api/gdpr/deletion-request", {
+      leadId,
+      requestSource: "user_request",
+    });
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+export async function requestDataExport(): Promise<Blob | null> {
+  try {
+    const headers = getWorkspaceHeader();
+    const resp = await fetch(`${API_BASE}/api/gdpr/data-export`, {
+      credentials: "include",
+      headers,
+    });
+    if (!resp.ok) return null;
+    return await resp.blob();
+  } catch (err) {
+    console.error("Data export failed:", err);
+    return null;
+  }
+}
+
+// ──────────── White-Label Brand Settings
+export interface BrandSettings {
+  brand_name?: string;
+  brand_logo_url?: string;
+  brand_primary_color?: string;
+  custom_domain?: string;
+  from_email?: string;
+}
+
+interface BrandResponse {
+  ok: boolean;
+  brand?: BrandSettings;
+  error?: string;
+}
+
+export async function getBrandSettings(workspaceId: string): Promise<BrandResponse> {
+  try {
+    return await apiGet<BrandResponse>(`/api/workspaces/${workspaceId}/brand`);
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+export async function updateBrandSettings(workspaceId: string, settings: BrandSettings): Promise<BrandResponse> {
+  try {
+    return await apiPutWithCsrf<BrandResponse>(`/api/workspaces/${workspaceId}/brand`, {
+      brandName: settings.brand_name,
+      brandLogoUrl: settings.brand_logo_url,
+      brandPrimaryColor: settings.brand_primary_color,
+      customDomain: settings.custom_domain,
+      fromEmail: settings.from_email,
+    });
   } catch (err) {
     return { ok: false, error: String(err) };
   }

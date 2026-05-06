@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useRouterState } from "@tanstack/react-router";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -64,6 +64,8 @@ function SettingsPage() {
   };
 
   const usagePct = Math.round((tierUsage.runsUsed / config.monthlyLimit) * 100);
+  const currentPath = useRouterState({ select: r => r.location.pathname });
+  const isSettingsIndex = currentPath === "/settings";
 
   useEffect(() => {
     void (async () => {
@@ -120,10 +122,12 @@ function SettingsPage() {
 
   return (
     <div className="space-y-10 max-w-4xl">
-      <div>
-        <span className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-          {t("settings.eyebrow.integrations")}
-        </span>
+      {isSettingsIndex ? (
+        <>
+          <div>
+            <span className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+              {t("settings.eyebrow.integrations")}
+            </span>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">
           {t("settings.servicesHeadingA")}{" "}
           <span className="text-gradient-cyber">
@@ -400,7 +404,7 @@ function SettingsPage() {
           {t("branding.subtitle")}
         </p>
         <Button
-          onClick={() => (window.location.href = "/branding")}
+          onClick={() => (window.location.href = "/settings/branding")}
           className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white/5 px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-white/10 transition ring-1 ring-white/10"
         >
           <Sparkles className="h-4 w-4" />
@@ -473,6 +477,9 @@ function SettingsPage() {
           {t("settings.onboarding.reset")}
         </Button>
       </div>
+    </>
+  ) : null}
+      <Outlet />
     </div>
   );
 }

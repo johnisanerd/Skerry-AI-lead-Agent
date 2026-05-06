@@ -9,6 +9,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Download, FileSpreadsheet, Database, Users } from "lucide-react";
 import { toast } from "sonner";
+import { exportLeads } from "@/lib/skerryApi";
 
 interface ExportButtonProps {
   selectedLeadIds?: string[];
@@ -27,37 +28,14 @@ export function ExportButton({
     setIsExporting(format);
 
     try {
-      // Build URL with parameters
-      const params = new URLSearchParams({
-        format,
-        workspaceId,
-        ...(selectedLeadIds.length > 0 && {
-          leadIds: selectedLeadIds.join(","),
-        }),
-      });
+      const blob = await exportLeads(format);
 
-      const response = await fetch(`/api/leads/export?${params}`, {
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Export failed");
-      }
-
-      // Get filename from headers or create default
-      const contentDisposition = response.headers.get("content-disposition");
-      let filename = `skerry-leads-${format}-${new Date().toISOString().split("T")[0]}.${format === "hubspot" ? "json" : "csv"}`;
-
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
-        if (filenameMatch) {
-          filename = filenameMatch[1];
-        }
+      if (!blob) {
+        throw new Error("Export fehlgeschlagen");
       }
 
       // Download file
-      const blob = await response.blob();
+      const filename = `skerry-leads-${format}-${new Date().toISOString().split("T")[0]}.${format === "hubspot" ? "json" : "csv"}`;
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.style.display = "none";

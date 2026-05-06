@@ -6,6 +6,7 @@
 
 import { createContext, useContext, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseBrowser";
+import { getBrandSettings, updateBrandSettings } from "@/lib/skerryApi";
 
 interface BrandSettings {
   workspaceId: string;
@@ -43,59 +44,47 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
     loadBrandSettings();
   }, []);
 
+  const getCurrentWorkspaceId = (): string | null => {
+    try {
+      const raw = localStorage.getItem("skerry-workspace");
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { currentId?: unknown };
+      if (typeof parsed.currentId === "string" && parsed.currentId.trim()) {
+        return parsed.currentId.trim();
+      }
+    } catch {
+      // ignore malformed localStorage
+    }
+    return null;
+  };
+
   const loadBrandSettings = async () => {
     try {
-      if (!supabase) {
-        // Fallback to default
-        setBrand(defaultBrand);
-        setIsLoading(false);
-        return;
-      }
-
-      // Try to get brand settings from current workspace
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        setBrand(defaultBrand);
-        setIsLoading(false);
-        return;
-      }
-
-      // Get current workspace from URL or localStorage
-      const currentWorkspaceId = localStorage.getItem(
-        "skerry-workspace-current"
-      );
+      const currentWorkspaceId = getCurrentWorkspaceId();
       if (!currentWorkspaceId) {
         setBrand(defaultBrand);
         setIsLoading(false);
+        applyBrandStylesToDOM(defaultBrand);
         return;
       }
 
-      // Load brand settings from workspace
-      const { data: workspace } = await supabase
-        .from("workspaces")
-        .select(
-          "brand_name, brand_logo_url, brand_primary_color, custom_domain, from_email"
-        )
-        .eq("id", currentWorkspaceId)
-        .single();
-
-      if (workspace) {
-        const brandSettings: BrandSettings = {
-          workspaceId: currentWorkspaceId,
-          brandName: workspace.brand_name || "Skerry",
-          brandLogoUrl: workspace.brand_logo_url || "",
-          brandPrimaryColor: workspace.brand_primary_color || "#06b6d4",
-          customDomain: workspace.custom_domain || "",
-          fromEmail: workspace.from_email || "Skerry <onboarding@resend.dev>",
-        };
-        setBrand(brandSettings);
-        applyBrandStylesToDOM(brandSettings);
-      } else {
+      const response = await getBrandSettings(currentWorkspaceId);
+      if (!response.ok || !response.brand) {
         setBrand(defaultBrand);
         applyBrandStylesToDOM(defaultBrand);
+        return;
       }
+
+      const brandSettings: BrandSettings = {
+        workspaceId: currentWorkspaceId,
+        brandName: response.brand.brand_name || "Skerry",
+        brandLogoUrl: response.brand.brand_logo_url || "",
+        brandPrimaryColor: response.brand.brand_primary_color || "#06b6d4",
+        customDomain: response.brand.custom_domain || "",
+        fromEmail: response.brand.from_email || "Skerry <onboarding@resend.dev>",
+      };
+      setBrand(brandSettings);
+      applyBrandStylesToDOM(brandSettings);
     } catch (err) {
       console.error("Failed to load brand settings:", err);
       setBrand(defaultBrand);
@@ -106,29 +95,37 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateBrand = async (updates: Partial<BrandSettings>) => {
-    if (!brand || !supabase) return;
+    if (!brand) return;
 
-    try {
-      const { error } = await supabase
-        .from("workspaces")
-        .update({
-          brand_name: updates.brandName,
-          brand_logo_url: updates.brandLogoUrl,
-          brand_primary_color: updates.brandPrimaryColor,
-          custom_domain: updates.customDomain,
-          from_email: updates.fromEmail,
-        })
-        .eq("id", brand.workspaceId);
-
-      if (error) throw error;
-
-      const updatedBrand = { ...brand, ...updates };
-      setBrand(updatedBrand);
-      applyBrandStylesToDOM(updatedBrand);
-    } catch (err) {
-      console.error("Failed to update brand settings:", err);
-      throw err;
+    const workspaceId = getCurrentWorkspaceId();
+    if (!workspaceId) {
+      throw new Error("Workspace ID missing");
     }
+
+    const response = await updateBrandSettings(workspaceId, {
+      brand_name: updates.brandName,
+      brand_logo_url: updates.brandLogoUrl,
+      brand_primary_color: updates.brandPrimaryColor,
+      custom_domain: updates.customDomain,
+      from_email: updates.fromEmail,
+    });
+
+    if (!response.ok || !response.brand) {
+      throw new Error(response.error || "Failed to update brand settings");
+    }
+
+    const updatedBrand: BrandSettings = {
+      workspaceId,
+      brandName: response.brand.brand_name || brand.brandName,
+      brandLogoUrl: response.brand.brand_logo_url || brand.brandLogoUrl,
+      brandPrimaryColor:
+        response.brand.brand_primary_color || brand.brandPrimaryColor,
+      customDomain: response.brand.custom_domain || brand.customDomain,
+      fromEmail: response.brand.from_email || brand.fromEmail,
+    };
+
+    setBrand(updatedBrand);
+    applyBrandStylesToDOM(updatedBrand);
   };
 
   const applyBrandStyles = () => {
