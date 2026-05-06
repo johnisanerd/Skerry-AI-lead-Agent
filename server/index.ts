@@ -40,7 +40,6 @@ import { EntitlementDb } from "./db";
 import { assertEnterpriseProductionConfig } from "./productionConfig";
 import { admin } from "./supabaseAdmin";
 import { discoverLeads } from "./pipeline/discoveryRouter";
-import { startSequenceRunner } from "./jobs/sequenceRunner";
 import {
   handleResendWebhook,
   validateResendWebhook,
@@ -62,7 +61,6 @@ import {
   deleteWorkspace,
   hasDeletionRequest,
 } from "./pipeline/gdprService.js";
-import { startGdprProcessor } from "./jobs/gdprProcessor.js";
 import { enrichLead } from "./pipeline/enrichmentService.js";
 import { calculateIntentScore } from "./pipeline/intentScorer.js";
 import { logEvent, makeRequestId } from "./lib/logger.js";
@@ -3571,10 +3569,6 @@ async function startServer() {
       health: `http://localhost:${port}/api/health`,
       ready: `http://localhost:${port}/api/ready`,
     });
-
-    // Start background jobs
-    startSequenceRunner();
-    startGdprProcessor();
   });
 }
 
