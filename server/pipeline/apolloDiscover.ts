@@ -5,6 +5,9 @@
  * Legal: vollständig ToS-konform, DSGVO-konform, offiziell lizenziert.
  */
 
+import { fetchWithResilience } from "../lib/providerResilience.js";
+import { logEvent } from "../lib/logger.js";
+
 export interface ApolloLead {
   firstName: string;
   lastName: string;
@@ -44,44 +47,72 @@ export async function searchApollo(
     }),
   };
 
-  const resp = await fetch("https://api.apollo.io/v1/mixed_people/search", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-cache",
-    },
-    body: JSON.stringify(body),
-  });
+  try {
+    const resp = await fetchWithResilience(
+      "https://api.apollo.io/v1/mixed_people/search",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+        },
+        body: JSON.stringify(body),
+      },
+      {
+        provider: "apollo",
+        requestId: params.requestId,
+        maxRetries: 3,
+        timeoutMs: 30000,
+      }
+    );
 
-  if (resp.status === 401) throw new Error("APOLLO_API_KEY_INVALID");
-  if (resp.status === 429) throw new Error("APOLLO_RATE_LIMIT");
-  if (!resp.ok) throw new Error(`Apollo API error: ${resp.status}`);
+    if (resp.status === 401) throw new Error("APOLLO_API_KEY_INVALID");
+    if (resp.status === 429) throw new Error("APOLLO_RATE_LIMIT");
+    if (!resp.ok) throw new Error(`Apollo API error: ${resp.status}`);
 
-  const data = (await resp.json()) as {
-    people?: Array<{
-      first_name?: string;
-      last_name?: string;
-      title?: string;
-      email?: string;
-      linkedin_url?: string;
-      organization?: { name?: string; website_url?: string };
-      city?: string;
-      country?: string;
-      seniority?: string;
-    }>;
-    pagination?: { total_entries: number };
-  };
+    const data = (await resp.json()) as {
+      people?: Array<{
+        first_name?: string;
+        last_name?: string;
+        title?: string;
+        email?: string;
+        linkedin_url?: string;
+        organization?: { name?: string; website_url?: string };
+        city?: string;
+        country?: string;
+        seniority?: string;
+      }>;
+      pagination?: { total_entries: number };
+    };
 
-  return (data.people ?? []).map(p => ({
-    firstName: p.first_name ?? "",
-    lastName: p.last_name ?? "",
-    title: p.title ?? "Executive",
-    email: p.email ?? null,
-    linkedinUrl: p.linkedin_url ?? null,
-    companyName: p.organization?.name ?? "",
-    companyWebsite: p.organization?.website_url ?? null,
-    city: p.city ?? null,
-    country: p.country ?? null,
-    seniority: p.seniority ?? null,
-  }));
+    return (data.people ?? []).map(p => ({
+      firstName: p.first_name ?? "",
+      lastName: p.last_name ?? "",
+      title: p.title ?? "Executive",
+      email: p.email ?? null,
+      linkedinUrl: p.linkedin_url ?? null,
+      companyName: p.organization?.name ?? "",
+      companyWebsite: p.organization?.website_url ?? null,
+      city: p.city ?? null,
+      country: p.country ?? null,
+      seniority: p.seniority ?? null,
+    }));
+  } catch (err) {
+    // Log the error with context
+    logEvent("error", "apollo_discovery_failed", {
+      requestId: params.requestId,
+      error: String(err),
+      page: params.page ?? 1,
+    });
+
+    // Re-throw with appropriate error code for degradation UX
+    if ((err as any)?.code === "CIRCUIT_OPEN") {
+      const circuitErr = new Error("Apollo service temporarily unavailable (circuit open)");
+      (circuitErr as any).code = "PROVIDER_CIRCUIT_OPEN";
+      (circuitErr as any).provider = "apollo";
+      throw circuitErr;
+    }
+
+    throw err;
+  }
 }

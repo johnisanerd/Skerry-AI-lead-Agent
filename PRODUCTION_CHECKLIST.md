@@ -39,7 +39,11 @@
 - [ ] synthesizeServerLeads() wird nur in /api/dev/seed verwendet
 - [ ] RLS Policies aktiv für alle Supabase Tabellen
 - [ ] Workspace-Isolation funktioniert (keine Cross-Workspace Datenlecks)
-- [ ] Rate-Limiting aktiv (express-rate-limit)
+- [x] Rate-Limiting enterprise-ready:
+      - [x] PostgreSQL-backed distributed store (nicht in-memory)
+      - [x] Workspace/User/API-Key Scoping (nicht nur IP-basiert)
+      - [x] Tier-basierte Limits (solo/team/agency)
+      - [x] Attackers mit mehreren IPs können Limits nicht umgehen
 - [ ] CSRF-Schutz aktiv (Helmet + SameSite Cookies)
 - [ ] HTTPS enforced in Production (SKERRY_ALLOWED_ORIGINS)
 
@@ -50,14 +54,19 @@
 - [ ] /api/health zeigt alle Service-Status korrekt
 - [ ] Memory Usage stabil (< 512MB)
 - [ ] Response Times < 2s für alle Endpoints
+- [x] Error Tracking funktioniert (Sentry):
+      - [x] Production-Fehler sind sichtbar (MTTD < 5 Min)
+      - [x] Sentry Dashboard zeigt Errors, Performance, Replays
 - [ ] Error Logging funktioniert (logEvent)
 
 ## Deployment Checklist
 
 - [ ] Environment Variables komplett:
-      DATABASE_URL (PostgreSQL für Entitlements)
+      DATABASE_URL (PostgreSQL für Entitlements + Rate Limiting)
       SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
       VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
+      SENTRY_DSN (Server) + SENTRY_RELEASE
+      VITE_SENTRY_DSN (Client) + VITE_SENTRY_RELEASE
       APOLLO_API_KEY (kostenlos)
       OPENAI_API_KEY
       RESEND_API_KEY

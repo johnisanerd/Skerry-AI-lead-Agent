@@ -196,7 +196,7 @@ const LiveAgentTerminal = memo(function LiveAgentTerminal({
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
             </div>
-            <span className="text-[10px] text-red-400 font-medium">LIVE</span>
+            <span className="text-[10px] text-red-400 light:text-red-600 font-medium">LIVE</span>
           </div>
         </div>
         <span className="text-[11px] text-muted-foreground light:text-zinc-900 font-mono tabular-nums">
@@ -205,7 +205,7 @@ const LiveAgentTerminal = memo(function LiveAgentTerminal({
       </div>
 
       {/* Terminal Body - Harmonized Light/Dark Theme with Geist Mono */}
-      <div 
+      <div
         ref={terminalRef}
         className="flex-1 overflow-y-auto font-geist-mono text-[11px] bg-[#09090b] light:bg-white light:text-zinc-900 rounded-lg border border-[#27272a] light:border-zinc-200 p-3 space-y-1"
         style={{ minHeight: '300px', maxHeight: '400px' }}
@@ -218,8 +218,8 @@ const LiveAgentTerminal = memo(function LiveAgentTerminal({
               className="flex items-center justify-center h-full text-muted-foreground/50 light:text-zinc-900/50"
             >
               <div className="text-center">
-                <Activity className="h-8 w-8 mx-auto mb-2 opacity-50" strokeWidth={1.5} />
-                <p>System Idle - Waiting for Task</p>
+                <Activity className="h-8 w-8 mx-auto mb-2 opacity-50 light:text-zinc-900/50" strokeWidth={1.5} />
+                <p className="light:text-zinc-900/50">System Idle - Waiting for Task</p>
               </div>
             </motion.div>
           ) : (

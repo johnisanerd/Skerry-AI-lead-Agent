@@ -19,7 +19,15 @@ Free Plan: bis zu 10.000 Email-Credits/Monat
 ## Supabase Setup (kostenlos)
 
 1. Projekt auf supabase.com erstellen
-2. SQL ausführen: supabase/migrations/20250503000000_skerry_core.sql
+2. SQL ausführen (in dieser Reihenfolge):
+   - `supabase/migrations/20250505000000_sequences.sql`
+   - `supabase/migrations/20250505000001_intent_scoring.sql`
+   - `supabase/migrations/20250505000002_ab_testing.sql`
+   - `supabase/migrations/20250505000003_white_label.sql`
+   - `supabase/migrations/20250505000004_audit_log.sql`
+   - `supabase/migrations/20250505000005_gdpr_compliance.sql`
+   - `supabase/migrations/20250506000000_lead_enrichment.sql`
+   - `supabase/migrations/20250507000000_rate_limiting.sql`
 3. SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in .env
 4. VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY in .env
 

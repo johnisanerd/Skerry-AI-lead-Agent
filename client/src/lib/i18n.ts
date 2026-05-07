@@ -93,6 +93,11 @@ const translations = {
     "pulse.integrity.scraping": "Source",
     "pulse.integrity.gpt": "Analyze",
     "pulse.integrity.instantly": "Send",
+
+    // Provider Status (Circuit Breaker / Degradation UX)
+    "provider.degradedTitle": "Service Degradation",
+    "provider.circuitOpen": "{provider} service is temporarily unavailable.",
+    "provider.circuitOpenDetail": "{provider} is temporarily unavailable. Retrying automatically...",
     "pulse.focus.title": "Today's focus",
     "pulse.focus.subtitle":
       "5 high-signal leads completed extraction. 3 are ready to send.",
@@ -975,6 +980,11 @@ const translations = {
     "pulse.focus.subtitle":
       "5 starke Leads haben die Extraktion abgeschlossen. 3 sind bereit für die Schmiede.",
     "pulse.focus.cta": "Forge öffnen",
+
+    // Provider Status (Circuit Breaker / Degradation UX)
+    "provider.degradedTitle": "Eingeschränkter Dienst",
+    "provider.circuitOpen": "{provider}-Dienst ist temporär nicht verfügbar.",
+    "provider.circuitOpenDetail": "{provider} ist temporär nicht verfügbar. Automatische Wiederholung läuft...",
 
     // Workspace page
     "workspace.eyebrow": "Lead-Arbeitsbereich",

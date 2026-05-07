@@ -7,6 +7,8 @@
 import { generateObject } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
+import { withResilience } from "../lib/providerResilience.js";
+import { logEvent } from "../lib/logger.js";
 
 export interface EnrichedLead {
   companySize?: string;
@@ -36,7 +38,7 @@ export interface Lead {
 /**
  * Bereichert einen Lead mit zusätzlichen Daten
  */
-export async function enrichLead(lead: Lead): Promise<EnrichedLead> {
+export async function enrichLead(lead: Lead, requestId?: string): Promise<EnrichedLead> {
   const enriched: EnrichedLead = {};
 
   // Basis-Daten aus Lead extrahieren
@@ -71,19 +73,29 @@ Provide:
 
 Return as JSON object.`;
 
-      const result = await generateObject({
-        model: openai("gpt-4o-mini"),
-        prompt,
-        schema: z.object({
-          companySize: z.string().optional(),
-          industry: z.string().optional(),
-          linkedinUrl: z.string().optional(),
-          twitterUrl: z.string().optional(),
-          website: z.string().optional(),
-          revenueRange: z.string().optional(),
-          fundingStage: z.string().optional(),
-        }),
-      });
+      const result = await withResilience(
+        async () => {
+          return generateObject({
+            model: openai("gpt-4o-mini"),
+            prompt,
+            schema: z.object({
+              companySize: z.string().optional(),
+              industry: z.string().optional(),
+              linkedinUrl: z.string().optional(),
+              twitterUrl: z.string().optional(),
+              website: z.string().optional(),
+              revenueRange: z.string().optional(),
+              fundingStage: z.string().optional(),
+            }),
+          });
+        },
+        {
+          provider: "openai",
+          requestId,
+          maxRetries: 3,
+          timeoutMs: 30000,
+        }
+      );
 
       enriched.companySize = result.object.companySize;
       enriched.industry = result.object.industry;
@@ -93,7 +105,20 @@ Return as JSON object.`;
       enriched.revenueRange = result.object.revenueRange;
       enriched.fundingStage = result.object.fundingStage;
     } catch (err) {
-      // Fallback: keine Daten
+      // Log the error with context
+      logEvent("error", "openai_enrichment_failed", {
+        requestId,
+        leadId: lead.id,
+        error: String(err),
+      });
+
+      // Check if circuit is open for degradation UX
+      if ((err as any)?.code === "CIRCUIT_OPEN" || (err as any)?.code === "PROVIDER_CIRCUIT_OPEN") {
+        // Return partial data with circuit open indicator
+        (enriched as any)._degraded = true;
+        (enriched as any)._reason = "OpenAI service temporarily unavailable";
+      }
+      // On other errors, return empty enrichment (graceful degradation)
     }
   }
 

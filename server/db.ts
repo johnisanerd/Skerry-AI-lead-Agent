@@ -48,6 +48,14 @@ export class EntitlementDb {
     return this.pool !== null;
   }
 
+  /** Get the underlying pool instance. Throws if not configured. */
+  getPool(): Pool {
+    if (!this.pool) {
+      throw new Error("Database not configured. Set DATABASE_URL environment variable.");
+    }
+    return this.pool;
+  }
+
   /** Throws if pool is missing or `select 1` fails. */
   async ping(): Promise<void> {
     if (!this.pool) throw new Error("database not configured");

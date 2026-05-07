@@ -49,11 +49,11 @@ import fs from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { EntitlementDb } from "./db";
 import { assertEnterpriseProductionConfig } from "./productionConfig";
 import { admin } from "./supabaseAdmin";
+import { createEnterpriseLimiters } from "./lib/rateLimit.js";
 import { discoverLeads } from "./pipeline/discoveryRouter";
 import {
   handleResendWebhook,
@@ -79,6 +79,29 @@ import {
 import { enrichLead } from "./pipeline/enrichmentService.js";
 import { calculateIntentScore } from "./pipeline/intentScorer.js";
 import { logEvent, makeRequestId } from "./lib/logger.js";
+import { getProvidersHealth } from "./lib/providerResilience.js";
+import {
+  validate,
+  loginSchema,
+  entitlementStartSchema,
+  generateLeadsSchema,
+  generateEmailSchema,
+  verifyEmailSchema,
+  sendEmailSchema,
+  enrichLeadsSchema,
+  persistLeadsSchema,
+  createSequenceSimpleSchema,
+  enrollSequenceSchema,
+  billingCheckoutSchema,
+  gdprDeletionRequestSchema,
+  resendWebhookSchema,
+  updateICPSchema,
+  updateBrandSchema,
+  deleteWorkspaceSchema,
+  createABTestSchema,
+  promoteABTestSchema,
+  seedLeadsSchema,
+} from "./middleware/validation.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -932,6 +955,10 @@ export async function buildApp(): Promise<express.Express> {
   });
   await entitlementDb.init();
 
+  // Initialize enterprise rate limiters with PostgreSQL-backed store
+  // Requires DATABASE_URL to be set for distributed rate limiting
+  const enterpriseLimiters = createEnterpriseLimiters(entitlementDb.getPool());
+
   const isProd = process.env.NODE_ENV === "production";
   const scriptSrc = ["'self'"];
   if (!isProd) {
@@ -964,37 +991,14 @@ export async function buildApp(): Promise<express.Express> {
     })
   );
   app.use(express.json({ limit: "1mb" }));
-  app.use(
-    rateLimit({
-      windowMs: 60 * 1000,
-      max: 180,
-      standardHeaders: true,
-      legacyHeaders: false,
-      message: { ok: false, code: "RATE_LIMITED", message: "Too many requests. Please retry shortly." },
-    })
-  );
-  const authLimiter = rateLimit({
-    windowMs: LOGIN_WINDOW_MS,
-    max: LOGIN_MAX_ATTEMPTS,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: {
-      ok: false,
-      code: "RATE_LIMITED",
-      message: "Too many login attempts. Try again in a few minutes.",
-    },
-  });
-  const llmLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 24,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: {
-      ok: false,
-      code: "RATE_LIMITED",
-      message: "Too many AI requests. Please wait a moment.",
-    },
-  });
+  
+  // Enterprise rate limiting with PostgreSQL-backed distributed store
+  // Scoped by workspace/user/API key instead of just IP
+  app.use(enterpriseLimiters.global);
+  
+  const authLimiter = enterpriseLimiters.auth;
+  const llmLimiter = enterpriseLimiters.llm;
+  // leadsLimiter available as enterpriseLimiters.leads if needed for specific routes
 
   // Default: reflect any Origin (dev). Set SKERRY_ALLOWED_ORIGINS to restrict credentialed API.
   app.use((req, res, next) => {
@@ -1153,12 +1157,8 @@ export async function buildApp(): Promise<express.Express> {
     targetAudience: z.string().max(2000).optional(),
   });
 
-  app.post("/api/auth/login", authLimiter, (req, res) => {
-    const parsed = loginSchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      return unifiedValidationError(res, "email + password");
-    }
-    const { email, password } = parsed.data as LoginBody;
+  app.post("/api/auth/login", authLimiter, validate({ body: loginSchema }), (req, res) => {
+    const { email, password } = (req as any).body as LoginBody;
     if (!ALLOW_DEMO_AUTH) {
       return unifiedError(
         res,
@@ -1370,13 +1370,9 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/workspaces/:id/icp",
     requireAuth,
+    validate({ body: updateICPSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = updateICPSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "ICP data");
-      }
-      const { business_description, ideal_customer, problem_solved } =
-        parsed.data;
+      const { business_description, ideal_customer, problem_solved } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -1472,22 +1468,17 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/entitlements/research/start",
     requireAuth,
+    validate({ body: entitlementStartSchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
       }
-      await resolveWorkspaceId(req, user);
-      requireWorkspaceRole(req, "member");
-      const parsed = entitlementStartSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "entitlement payload");
-      }
       const workspaceId = await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
       const workspaceTier = await getWorkspaceTier(workspaceId);
       const limits = TIER_LIMITS[workspaceTier];
-      const { requestedLeads } = parsed.data as EntitlementStartBody;
+      const { requestedLeads } = (req as any).body as EntitlementStartBody;
       const requested = Math.max(
         1,
         Number(requestedLeads ?? limits.maxLeadsPerRun)
@@ -1508,15 +1499,12 @@ export async function buildApp(): Promise<express.Express> {
         const usageMonth = getCurrentMonthKey();
         const usage = await entitlementDb.getWorkspaceUsage(workspaceId, usageMonth);
         if (limits.leads !== -1 && usage.leads + requested > limits.leads) {
-          return res.status(403).json({
-            ok: false,
-            code: "MONTHLY_LEAD_LIMIT_REACHED",
-            message:
-              "Monthly lead limit reached. Upgrade plan or wait for next month.",
-            tier: workspaceTier,
-            leadsUsed: usage.leads,
-            monthlyLeads: limits.leads,
-          });
+          return unifiedError(
+            res,
+            "MONTHLY_LEAD_LIMIT_REACHED",
+            "Monthly lead limit reached. Upgrade plan or wait for next month.",
+            403
+          );
         }
         return res.json({
           ok: true,
@@ -1543,6 +1531,7 @@ export async function buildApp(): Promise<express.Express> {
     "/api/leads/generate",
     requireAuth,
     llmLimiter,
+    validate({ body: generateLeadsSchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -1556,11 +1545,7 @@ export async function buildApp(): Promise<express.Express> {
       const workspaceTier = await getWorkspaceTier(workspaceId);
       const limits = TIER_LIMITS[workspaceTier];
       const usageMonth = getCurrentMonthKey();
-      const parsed = generateLeadsSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "lead generation payload");
-      }
-      const body = parsed.data as GenerateLeadsBody;
+      const body = (req as any).body as GenerateLeadsBody;
       const requested = Math.max(
         1,
         Number(body.requestedLeads ?? limits.maxLeadsPerRun)
@@ -1575,15 +1560,12 @@ export async function buildApp(): Promise<express.Express> {
         limits,
       });
       if (!consumed.allowed) {
-        return res.status(403).json({
-          ok: false,
-          code: "MONTHLY_LEAD_LIMIT_REACHED",
-          message:
-            "Monthly lead limit reached. Upgrade plan or wait for next month.",
-          tier: workspaceTier,
-          leadsUsed: consumed.usage.leads,
-          monthlyLeads: limits.leads,
-        });
+        return unifiedError(
+          res,
+          "MONTHLY_LEAD_LIMIT_REACHED",
+          "Monthly lead limit reached. Upgrade plan or wait for next month.",
+          403
+        );
       }
       const businessDescription = (
         body.businessDescription ?? "B2B SaaS"
@@ -1669,15 +1651,7 @@ export async function buildApp(): Promise<express.Express> {
 
       // No provider available
       if (leads.length === 0) {
-        return res.status(503).json({
-          ok: false,
-          code: "NO_DISCOVERY_PROVIDER",
-          message: "Kein Discovery-Provider konfiguriert.",
-          setup: {
-            apollo: "APOLLO_API_KEY in .env setzen — kostenlos auf apollo.io",
-            openai: "OPENAI_API_KEY in .env setzen — Fallback-Option",
-          },
-        });
+        return unifiedServiceUnavailable(res, "Kein Discovery-Provider konfiguriert.");
       }
 
       await logAudit({
@@ -1709,12 +1683,9 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/leads/enrich",
     requireAuth,
+    validate({ body: enrichLeadsSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = enrichLeadsSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "leadIds array");
-      }
-      const { leadIds } = parsed.data;
+      const { leadIds } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -1743,14 +1714,12 @@ export async function buildApp(): Promise<express.Express> {
           limits,
         });
         if (!consumed.allowed) {
-          return res.status(403).json({
-            ok: false,
-            code: "MONTHLY_API_CALL_LIMIT_REACHED",
-            message: "Monthly API call limit reached. Upgrade plan or wait for next month.",
-            tier: workspaceTier,
-            apiCallsUsed: currentUsage.apiCalls,
-            monthlyApiCalls: limits.apiCalls,
-          });
+          return unifiedError(
+            res,
+            "MONTHLY_API_CALL_LIMIT_REACHED",
+            "Monthly API call limit reached. Upgrade plan or wait for next month.",
+            403
+          );
         }
 
         if (!admin) {
@@ -1844,12 +1813,9 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/leads/persist",
     requireAuth,
+    validate({ body: persistLeadsSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = persistLeadsSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "leads array");
-      }
-      const { leads } = parsed.data;
+      const { leads } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -1865,7 +1831,7 @@ export async function buildApp(): Promise<express.Express> {
             reason: "no_db",
           });
         }
-        const leadsToInsert = leads.map(lead => ({
+        const leadsToInsert = leads.map((lead: any) => ({
           workspace_id: targetWorkspaceId,
           first_name: lead.firstName || lead.personal?.firstName,
           last_name: lead.lastName || lead.personal?.lastName,
@@ -1909,16 +1875,13 @@ export async function buildApp(): Promise<express.Express> {
     app.post(
       "/api/dev/seed-leads",
       requireAuth,
+      validate({ body: seedLeadsSchema }),
       asyncHandler(async (req, res) => {
-        const parsed = seedLeadsSchema.safeParse(req.body ?? {});
-        if (!parsed.success) {
-          return unifiedValidationError(res, "seed-leads payload");
-        }
         const {
           count = 5,
           businessDescription = "B2B SaaS",
           targetAudience = "Growth-stage startups",
-        } = parsed.data;
+        } = (req as any).body;
         const user = getSessionUser(req);
         if (!user) {
           return unifiedAuthError(res);
@@ -1946,12 +1909,9 @@ export async function buildApp(): Promise<express.Express> {
     "/api/email/generate",
     requireAuth,
     llmLimiter,
+    validate({ body: generateEmailSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = generateEmailSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "email generation payload");
-      }
-      const body = parsed.data as GenerateEmailBody;
+      const body = (req as any).body as GenerateEmailBody;
       const lead = body.lead ?? {};
       const firstName = (lead.firstName ?? "").trim();
       const lastName = (lead.lastName ?? "").trim();
@@ -2053,6 +2013,10 @@ export async function buildApp(): Promise<express.Express> {
   app.get("/api/health", (_req, res) => {
     const hasApollo = Boolean(process.env.APOLLO_API_KEY);
     const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
+    
+    // Get circuit breaker status for providers
+    const providerHealth = getProvidersHealth();
+    
     res.json({
       ok: true,
       version: "1.0.0",
@@ -2064,6 +2028,7 @@ export async function buildApp(): Promise<express.Express> {
         supabase: Boolean(process.env.SUPABASE_URL),
         stripe: Boolean(process.env.STRIPE_SECRET_KEY),
       },
+      circuits: providerHealth,
       discovery_provider: hasApollo ? "apollo" : hasOpenAI ? "openai" : "none",
       demo_mode: process.env.ALLOW_DEMO_AUTH === "true",
       ready_for_production: hasApollo && Boolean(process.env.SUPABASE_URL),
@@ -2074,12 +2039,9 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/billing/checkout",
     requireAuth,
+    validate({ body: billingCheckoutSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = billingCheckoutSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "priceId");
-      }
-      const { priceId } = parsed.data;
+      const { priceId } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -2248,12 +2210,9 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/sequences",
     requireAuth,
+    validate({ body: createSequenceSimpleSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = createSequenceSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "name and steps");
-      }
-      const { name, steps } = parsed.data;
+      const { name, steps } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -2330,12 +2289,9 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/sequences/:id/enroll",
     requireAuth,
+    validate({ body: enrollSequenceSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = enrollSequenceSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "leadId");
-      }
-      const { leadId } = parsed.data;
+      const { leadId } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -2460,12 +2416,9 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/ab-tests",
     requireAuth,
+    validate({ body: createABTestSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = createABTestSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "sequenceId, stepNumber, and variants");
-      }
-      const { sequenceId, stepNumber, variants } = parsed.data;
+      const { sequenceId, stepNumber, variants } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -2572,12 +2525,9 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/ab-tests/:id/promote",
     requireAuth,
+    validate({ body: promoteABTestSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = promoteABTestSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "winnerVariantId");
-      }
-      const { winnerVariantId } = parsed.data;
+      const { winnerVariantId } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -2658,15 +2608,12 @@ export async function buildApp(): Promise<express.Express> {
         limits,
       });
       if (!consumed.allowed) {
-        return res.status(403).json({
-          ok: false,
-          code: "MONTHLY_EXPORT_LIMIT_REACHED",
-          message:
-            "Monthly export limit reached. Upgrade plan or wait for next month.",
-          tier: workspaceTier,
-          exportsUsed: consumed.usage.exports,
-          monthlyExports: limits.exports,
-        });
+        return unifiedError(
+          res,
+          "MONTHLY_EXPORT_LIMIT_REACHED",
+          "Monthly export limit reached. Upgrade plan or wait for next month.",
+          403
+        );
       }
 
       if (!admin) {
@@ -2990,10 +2937,12 @@ export async function buildApp(): Promise<express.Express> {
           workspaceId: id,
           error: String(err),
         });
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to export workspace data",
-        });
+        return unifiedError(
+          res,
+          "WORKSPACE_EXPORT_FAILED",
+          "Failed to export workspace data",
+          500
+        );
       }
     })
   );
@@ -3002,15 +2951,8 @@ export async function buildApp(): Promise<express.Express> {
   app.delete(
     "/api/workspaces/:id/delete",
     requireAuth,
+    validate({ body: deleteWorkspaceSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = deleteWorkspaceSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Confirmation required. Send { confirmation: 'DELETE_WORKSPACE' }",
-        });
-      }
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -3112,12 +3054,9 @@ export async function buildApp(): Promise<express.Express> {
   app.put(
     "/api/workspaces/:id/brand",
     requireAuth,
+    validate({ body: updateBrandSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = updateBrandSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "brand data");
-      }
-      const { brandName, brandLogoUrl, brandPrimaryColor, customDomain, fromEmail } = parsed.data;
+      const { brandName, brandLogoUrl, brandPrimaryColor, customDomain, fromEmail } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -3174,12 +3113,9 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/gdpr/deletion-request",
     requireAuth,
+    validate({ body: gdprDeletionRequestSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = gdprDeletionRequestSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "leadId");
-      }
-      const { leadId, requestSource } = parsed.data;
+      const { leadId, requestSource } = (req as any).body;
       const user = getSessionUser(req);
       if (!user) {
         return unifiedAuthError(res);
@@ -3259,12 +3195,9 @@ export async function buildApp(): Promise<express.Express> {
   // ──────────── /api/webhooks/resend
   app.post(
     "/api/webhooks/resend",
+    validate({ body: resendWebhookSchema }),
     asyncHandler(async (req, res) => {
-      const parsed = resendWebhookSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "events array");
-      }
-      const events = parsed.data.events;
+      const { events } = (req as any).body;
       const signature = req.headers["resend-signature"] as string;
       const secret = process.env.RESEND_WEBHOOK_SECRET;
 
@@ -3297,6 +3230,7 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/email/verify",
     requireAuth,
+    validate({ body: verifyEmailSchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -3304,11 +3238,7 @@ export async function buildApp(): Promise<express.Express> {
       }
       await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
-      const parsed = verifyEmailSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "email");
-      }
-      const { email } = parsed.data as VerifyEmailBody;
+      const { email } = (req as any).body as VerifyEmailBody;
       const neverbounceKey = process.env.NEVERBOUNCE_API_KEY;
       if (!neverbounceKey) {
         return res.json({ ok: true, valid: true, status: "format_only" });
@@ -3358,6 +3288,7 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/email/send",
     requireAuth,
+    validate({ body: sendEmailSchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -3365,11 +3296,7 @@ export async function buildApp(): Promise<express.Express> {
       }
       const workspaceId = await resolveWorkspaceId(req, user);
       requireWorkspaceRole(req, "member");
-      const parsed = sendEmailSchema.safeParse(req.body ?? {});
-      if (!parsed.success) {
-        return unifiedValidationError(res, "to + bodyMarkdown");
-      }
-      const { to, subject, bodyMarkdown } = parsed.data as SendEmailBody;
+      const { to, subject, bodyMarkdown } = (req as any).body as SendEmailBody;
       const resendKey = process.env.RESEND_API_KEY;
       const from =
         process.env.SKERRY_FROM_EMAIL ?? "Skerry <onboarding@resend.dev>";

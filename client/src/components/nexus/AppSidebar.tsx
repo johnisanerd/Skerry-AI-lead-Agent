@@ -114,25 +114,33 @@ export function AppSidebar() {
     <Sidebar collapsible="icon" className="border-r border-sidebar-border bg-sidebar">
       <SidebarHeader className="border-b border-sidebar-border">
         <Link to="/" className="flex items-center gap-2.5 px-2 py-1.5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-sidebar-primary/10">
+          <div className="flex h-7 w-7 items-center justify-center">
+            {/* Gantry Core Logo - 'S' form */}
             <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
+              width="28"
+              height="28"
+              viewBox="0 0 64 64"
               fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              className="text-sidebar-primary"
+              xmlns="http://www.w3.org/2000/svg"
             >
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+              <defs>
+                <linearGradient id="gantry-grad-sidebar" x1="0%" y1="100%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#7c3aed" />
+                  <stop offset="100%" stopColor="#c084fc" />
+                </linearGradient>
+              </defs>
+              {/* Geometric 'S' path */}
+              <path d="M12 18 L32 8 L52 18 L52 32 M12 32 L12 46 L32 56 L52 46 M32 20 L44 26 L44 38 L32 44 L20 38 L20 26 Z" stroke="url(#gantry-grad-sidebar)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/>
+              {/* Inner 'S' shape lines */}
+              <path d="M32 28 V36 M28 32 H36" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
             </svg>
           </div>
           {!collapsed && (
             <div className="flex flex-col leading-none">
-              <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              <span className="text-[10px] uppercase tracking-[0.2em] text-zinc-900 dark:text-white">
                 Skerry
               </span>
-              <span className="text-sm font-semibold text-foreground">
+              <span className="text-sm font-semibold text-zinc-900 dark:text-white">
                 LeadGen OS
               </span>
             </div>

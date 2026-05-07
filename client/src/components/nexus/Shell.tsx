@@ -8,6 +8,7 @@ import { ContextHeader } from "./ContextHeader";
 import { Onboarding } from "./Onboarding";
 import { LoginPage } from "./LoginPage";
 import { FindLeadsModal } from "./FindLeadsModal";
+import { ProviderStatus } from "./ProviderStatus";
 import { useBrand } from "@/contexts/BrandContext";
 import { useT } from "@/lib/i18n";
 import { Badge } from "@/components/ui/badge";
@@ -107,6 +108,11 @@ export function Shell() {
           {/* Context Header with breadcrumbs and Cmd+K */}
           <ContextHeader />
 
+          {/* Provider Status - shows degradation warnings */}
+          <div className="px-4 pt-2">
+            <ProviderStatus />
+          </div>
+
           {/* Action Bar - Pipeline button as North Star CTA */}
           <div className="flex items-center justify-between border-b border-border/50 px-4 h-12">
             <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
@@ -116,7 +122,7 @@ export function Shell() {
               <Button
                 onClick={() => setShowFindLeads(true)}
                 size="sm"
-                className="h-8 px-4 text-xs font-medium bg-purple-600 hover:bg-purple-700 text-white border-purple-500 dark:bg-purple-600 dark:hover:bg-purple-700 dark:text-white light:bg-purple-600 light:hover:bg-purple-700 light:text-white"
+                className="h-8 px-4 text-xs font-medium bg-[#7c3aed] hover:bg-[#6d28d9] text-white border-[#7c3aed]"
               >
                 {t("shell.runPipeline")}
               </Button>

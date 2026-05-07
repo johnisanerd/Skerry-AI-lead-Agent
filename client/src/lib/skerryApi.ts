@@ -50,11 +50,24 @@ interface SendResponse {
 
 interface HealthResponse {
   ok: boolean;
+  version: string;
   services: {
+    apollo: boolean;
     openai: boolean;
     resend: boolean;
     neverbounce: boolean;
+    supabase: boolean;
+    stripe: boolean;
   };
+  circuits?: Record<string, {
+    state: string;
+    failureCount: number;
+    successCount: number;
+    isOpen: boolean;
+  }>;
+  discovery_provider: string;
+  demo_mode: boolean;
+  ready_for_production: boolean;
 }
 
 interface AuthResponse {
