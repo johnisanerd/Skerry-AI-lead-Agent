@@ -116,7 +116,7 @@ export function Shell() {
               <Button
                 onClick={() => setShowFindLeads(true)}
                 size="sm"
-                className="h-8 px-4 text-xs font-medium"
+                className="h-8 px-4 text-xs font-medium bg-purple-600 hover:bg-purple-700 text-white border-purple-500 dark:bg-purple-600 dark:hover:bg-purple-700 dark:text-white light:bg-purple-600 light:hover:bg-purple-700 light:text-white"
               >
                 {t("shell.runPipeline")}
               </Button>

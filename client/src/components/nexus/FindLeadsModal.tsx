@@ -99,7 +99,6 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
   const handleStart = async () => {
     const clientGuard = canStartRun(tier);
     if (!clientGuard.allowed) {
-      // Safety fallback if local state lags behind server.
       toast.error(clientGuard.reason ?? "Monthly plan limit reached.");
       return;
     }
@@ -113,8 +112,7 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
     const authorization = await authorizeResearchStart(targetCount);
     if (!authorization.ok) {
       toast.error(
-        authorization.message ??
-          "Unable to start this research run. Please contact support or upgrade your plan."
+        authorization.message ?? "Unable to start this research run. Please contact support or upgrade your plan."
       );
       setPhase("confirm");
       return;
@@ -162,7 +160,6 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
     if (leadsFoundCount > 0) {
       toast.success(`${leadsFoundCount} new leads added to your pipeline!`);
       onClose();
-      // Navigate so the user immediately sees the leads they just generated.
       navigate({ to: "/workspace" });
       return;
     }
@@ -327,14 +324,16 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
                       </span>
                     </div>
 
+                    {/* Pipeline starten Button with lila glow */}
                     <Button
                       onClick={handleStart}
                       disabled={!runGuard.allowed || !canRunInWorkspace}
-                      className={`w-full h-11 bg-gradient-to-r ${tierColors[tier]} text-white font-semibold shadow-lg transition-all hover:scale-[1.01]`}
+                      variant="lilaGlow"
+                      className="w-full h-11 text-white font-semibold transition-all hover:scale-[1.01]"
                     >
                       <Zap className="mr-2 h-4 w-4" />
                       {runGuard.allowed && canRunInWorkspace
-                        ? `Start Research (${config.maxLeadsPerRun} leads max · est. $${estimatedRunCost.toFixed(2)})`
+                        ? `Pipeline starten (${config.maxLeadsPerRun} leads max · est. $${estimatedRunCost.toFixed(2)})`
                         : !canRunInWorkspace
                           ? "Insufficient workspace permissions"
                           : "Monthly run limit reached"}

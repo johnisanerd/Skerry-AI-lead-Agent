@@ -30,8 +30,10 @@ import {
   Shield,
   CreditCard,
   Settings,
+  ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAccountTierStore } from "@/store/accountTierStore";
 
 type BreadcrumbItem = {
   label: string;
@@ -81,12 +83,13 @@ export function ContextHeader() {
   const currentPath = routerState.location.pathname;
   const t = useT();
   const [open, setOpen] = useState(false);
+  const tier = useAccountTierStore(s => s.tier);
 
   // Extract workspace ID from path if present
   const pathSegments = currentPath.split("/").filter(Boolean);
   const breadcrumbs: BreadcrumbItem[] = [];
 
-  // Build breadcrumbs
+  // Build breadcrumbs - show "Workspace / Dashboard" format
   let accumulatedPath = "";
   pathSegments.forEach((segment, index) => {
     accumulatedPath += `/${segment}`;
@@ -115,52 +118,85 @@ export function ContextHeader() {
     return () => document.removeEventListener("keydown", down);
   }, []);
 
-  return (
-    <>
-      <header className="context-header border-b border-border/50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="flex items-center justify-between px-4 h-12">
-          {/* Breadcrumb Navigation */}
-          <nav className="breadcrumb-nav flex items-center gap-1 text-sm">
-            <Link
-              to="/"
-              className="flex items-center text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <Home className="h-3.5 w-3.5" strokeWidth={1.5} />
-            </Link>
-            {breadcrumbs.map((crumb, index) => (
-              <div key={crumb.label} className="flex items-center gap-1">
-                <ChevronRight className="h-3 w-3 text-muted-foreground/50" strokeWidth={1.5} />
-                {crumb.href ? (
-                  <Link
-                    to={crumb.href}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {crumb.label}
-                  </Link>
-                ) : (
-                  <span className="text-foreground font-medium">{crumb.label}</span>
-                )}
-              </div>
-            ))}
-          </nav>
+  const tierColors: Record<string, string> = {
+    solo: "border-muted text-muted-foreground",
+    team: "border-blue-500/30 text-blue-400",
+    agency: "border-purple-500/30 text-purple-400",
+  };
 
-          {/* Cmd+K Command Bar Trigger */}
+  return (
+    <header className="context-header border-b border-border bg-[#09090b]">
+      <div className="flex items-center justify-between px-4 h-12">
+        {/* Left: Breadcrumbs with System Status */}
+        <nav className="breadcrumb-nav flex items-center gap-2 text-sm flex-shrink-0">
+          <Link
+            to="/"
+            className="flex items-center text-muted-foreground light:text-white hover:text-foreground light:hover:text-white transition-colors"
+          >
+            <Home className="h-3.5 w-3.5" strokeWidth={1.5} />
+          </Link>
+          {breadcrumbs.map((crumb, index) => (
+            <div key={crumb.label} className="flex items-center gap-1">
+              <ChevronRight className="h-3 w-3 text-muted-foreground/50 light:text-white/50" strokeWidth={1.5} />
+              {crumb.href ? (
+                <Link
+                  to={crumb.href}
+                  className="text-muted-foreground light:text-white hover:text-foreground light:hover:text-white transition-colors"
+                >
+                  {crumb.label}
+                </Link>
+              ) : (
+                <span className="text-foreground light:text-white font-medium">{crumb.label}</span>
+              )}
+            </div>
+          ))}
+          
+          {/* System Status Pill with green pulse animation */}
+          <div className="ml-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#18181b] border border-[#27272a]">
+            <div className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            </div>
+            <span className="text-[11px] text-muted-foreground light:text-white/70">Nodes: Operational</span>
+          </div>
+        </nav>
+
+        {/* Center: Cmd+K Search Bar (bg-zinc-900/50, 1px border) */}
+        <div className="flex-grow max-w-lg mx-auto px-4">
           <button
             onClick={() => setOpen(true)}
             className={cn(
-              "flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground",
-              "border border-border/50 rounded-md bg-background hover:bg-muted/50",
-              "transition-colors"
+              "flex items-center gap-2 w-full px-4 py-1.5 text-xs text-muted-foreground light:text-white",
+              "bg-zinc-900/50 border border-[#27272a] rounded-md",
+              "hover:border-[#3f3f46] transition-colors"
             )}
           >
             <Search className="h-3.5 w-3.5" strokeWidth={1.5} />
-            <span>Search...</span>
-            <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border border-border/50 bg-muted/50 px-1.5 font-mono text-[10px] text-muted-foreground">
+            <span className="flex-1 text-left">Search...</span>
+            <kbd className="inline-flex h-5 items-center gap-1 rounded border border-[#27272a] bg-[#0c0c0e] px-1.5 font-mono text-[10px] text-muted-foreground light:text-white">
               <span className="text-xs">⌘</span>K
             </kbd>
           </button>
         </div>
-      </header>
+
+        {/* Right: User Profile with Tier Badge */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <div className={cn(
+            "flex items-center gap-2 px-3 py-1.5 rounded-md bg-[#18181b] border",
+            tierColors[tier] || tierColors.solo
+          )}>
+            <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center">
+              <span className="text-[10px] font-medium text-primary">
+                {tier ? tier.charAt(0).toUpperCase() : 'U'}
+              </span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[11px] font-medium text-foreground light:text-white capitalize">{tier || 'User'}</span>
+            </div>
+            <ChevronDown className="h-3 w-3 text-muted-foreground light:text-white" strokeWidth={1.5} />
+          </div>
+        </div>
+      </div>
 
       {/* Command Dialog */}
       <CommandDialog open={open} onOpenChange={setOpen}>
@@ -200,6 +236,6 @@ export function ContextHeader() {
           </CommandList>
         </Command>
       </CommandDialog>
-    </>
+    </header>
   );
 }

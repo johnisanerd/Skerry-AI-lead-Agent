@@ -60,7 +60,6 @@ const navGroups: NavGroup[] = [
       { titleKey: "sidebar.workspaces" as const, url: "/workspaces", icon: Package },
       { titleKey: "sidebar.leads" as const, url: "/workspace", icon: Users },
       { titleKey: "sidebar.review" as const, url: "/review", icon: CheckCircle },
-      { titleKey: "sidebar.sequences" as const, url: "/sequences", icon: GitBranch },
     ],
   },
   {
@@ -78,7 +77,6 @@ const navGroups: NavGroup[] = [
     items: [
       { titleKey: "sidebar.deduplication" as const, url: "/deduplication", icon: Ban },
       { titleKey: "sidebar.assetLibrary" as const, url: "/asset-library", icon: Archive },
-      { titleKey: "sidebar.feedback" as const, url: "/feedback", icon: MessageSquare },
       { titleKey: "sidebar.forge" as const, url: "/forge", icon: Mail },
     ],
   },
@@ -113,10 +111,10 @@ export function AppSidebar() {
   };
 
   return (
-    <Sidebar collapsible="icon" className="border-r border-sidebar-border/50">
-      <SidebarHeader className="border-b border-sidebar-border/50">
+    <Sidebar collapsible="icon" className="border-r border-sidebar-border bg-sidebar">
+      <SidebarHeader className="border-b border-sidebar-border">
         <Link to="/" className="flex items-center gap-2.5 px-2 py-1.5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-sidebar-primary/10">
             <svg
               width="16"
               height="16"
@@ -124,7 +122,7 @@ export function AppSidebar() {
               fill="none"
               stroke="currentColor"
               strokeWidth="1.5"
-              className="text-primary"
+              className="text-sidebar-primary"
             >
               <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
             </svg>
@@ -173,9 +171,13 @@ export function AppSidebar() {
                             isActive={active}
                             tooltip={collapsed ? label : undefined}
                             className={cn(
-                              "h-8 px-2 text-[13px]",
-                              active && "bg-primary/10 text-primary font-medium"
+                              "h-8 px-2 text-[13px] relative",
+                              active && "bg-sidebar-accent font-medium"
                             )}
+                            style={active ? {
+                              borderLeft: "2px solid var(--sidebar-primary)",
+                              paddingLeft: "calc(0.5rem - 2px)"
+                            } : {}}
                           >
                             <Link to={item.url} className="flex items-center gap-2.5">
                               <ThinIcon Icon={item.icon} className="h-4 w-4" />

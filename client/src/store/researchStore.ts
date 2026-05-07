@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { AccountTier } from "./accountTierStore";
+import { pipelineEmitter, type LogType } from "@/lib/pipelineEmitter";
 
 export type ResearchDepth = "basic" | "standard" | "deep";
 export type ResearchStatus = "idle" | "running" | "complete" | "error";
@@ -78,6 +79,19 @@ interface ResearchStore {
   setLeadsFoundCount: (count: number) => void;
 }
 
+// Map step labels to log types
+const stepToLogType: Record<string, LogType> = {
+  "Keyword Search": 'RESEARCH',
+  "Profile Extraction": 'RESEARCH',
+  "Website Analysis": 'ANALYTICS',
+  "Website Deep-Crawl": 'ANALYTICS',
+  "LinkedIn Enrichment": 'ENRICH',
+  "News & Signal Monitoring": 'ANALYTICS',
+  "AI Intent Scoring": 'ANALYTICS',
+  "Email Validation": 'SYSTEM',
+  "CRM Deduplication": 'SYSTEM',
+};
+
 export const useResearchStore = create<ResearchStore>((set, get) => ({
   status: "idle",
   steps: [],
@@ -102,6 +116,9 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
       leadsFoundCount: 0,
     });
 
+    // Emit initial research log
+    pipelineEmitter.research(`Starting ${config.label} pipeline...`);
+
     for (let i = 0; i < initialSteps.length; i++) {
       // Mark current step as running
       set(s => ({
@@ -110,6 +127,12 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         ),
         currentStepIndex: i,
       }));
+
+      const currentStep = config.steps[i];
+      const logType = stepToLogType[currentStep] || 'RESEARCH';
+      
+      // Emit step start log
+      pipelineEmitter.emit(logType, `Starting: ${currentStep}`);
 
       // Simulate step duration based on depth
       const baseDuration = tier === "solo" ? 600 : tier === "team" ? 800 : 1000;
@@ -128,14 +151,22 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
         "CRM Deduplication": `Removed ${Math.floor(Math.random() * 5 + 1)} duplicates`,
       };
 
+      const detail = details[currentStep] ?? "Done";
+      
+      // Emit step completion log
+      pipelineEmitter.emit(logType, `Completed: ${currentStep} — ${detail}`);
+
       set(s => ({
         steps: s.steps.map((step, idx) =>
           idx === i
-            ? { ...step, status: "done", detail: details[step.label] ?? "Done" }
+            ? { ...step, status: "done", detail }
             : step
         ),
       }));
     }
+
+    // Emit completion log
+    pipelineEmitter.system("Research pipeline completed successfully");
 
     // Caller (FindLeadsModal) sets leadsFoundCount via setLeadsFoundCount
     // after its own async lead-generation work completes.
@@ -146,6 +177,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
   },
 
   reset: () => {
+    pipelineEmitter.clear();
     set({
       status: "idle",
       steps: [],
@@ -154,5 +186,8 @@ export const useResearchStore = create<ResearchStore>((set, get) => ({
       leadsFoundCount: 0,
     });
   },
-  setLeadsFoundCount: (count: number) => set({ leadsFoundCount: count }),
+  setLeadsFoundCount: (count: number) => {
+    set({ leadsFoundCount: count });
+    pipelineEmitter.draft(`${count} leads ready for draft generation`);
+  },
 }));

@@ -900,6 +900,10 @@ const translations = {
     "sidebar.billing": "Abrechnung",
     "sidebar.settings": "Einstellungen",
     "sidebar.workspace": "Arbeitsbereich",
+    "sidebar.group.campaigns": "KAMPAGNEN",
+    "sidebar.group.intelligence": "INTELLIGENCE",
+    "sidebar.group.operations": "OPERATIONS",
+    "sidebar.group.system": "SYSTEM",
 
     // Shell / header
     "shell.eyebrow": "Asset-basiert",
