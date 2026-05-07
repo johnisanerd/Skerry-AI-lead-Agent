@@ -131,22 +131,22 @@ export function ContextHeader() {
         <nav className="breadcrumb-nav flex items-center gap-2 text-sm flex-shrink-0">
           <Link
             to="/"
-            className="flex items-center text-muted-foreground light:text-white hover:text-foreground light:hover:text-white transition-colors"
+            className="flex items-center text-zinc-100 hover:text-white transition-colors"
           >
             <Home className="h-3.5 w-3.5" strokeWidth={1.5} />
           </Link>
           {breadcrumbs.map((crumb, index) => (
             <div key={crumb.label} className="flex items-center gap-1">
-              <ChevronRight className="h-3 w-3 text-muted-foreground/50 light:text-white/50" strokeWidth={1.5} />
+              <ChevronRight className="h-3 w-3 text-zinc-100/50" strokeWidth={1.5} />
               {crumb.href ? (
                 <Link
                   to={crumb.href}
-                  className="text-muted-foreground light:text-white hover:text-foreground light:hover:text-white transition-colors"
+                  className="text-zinc-100 hover:text-white transition-colors"
                 >
                   {crumb.label}
                 </Link>
               ) : (
-                <span className="text-foreground light:text-white font-medium">{crumb.label}</span>
+                <span className="text-white font-medium">{crumb.label}</span>
               )}
             </div>
           ))}
@@ -157,7 +157,7 @@ export function ContextHeader() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
             </div>
-            <span className="text-[11px] text-muted-foreground light:text-white/70">Nodes: Operational</span>
+            <span className="text-[11px] text-zinc-100/70">Nodes: Operational</span>
           </div>
         </nav>
 
@@ -166,14 +166,14 @@ export function ContextHeader() {
           <button
             onClick={() => setOpen(true)}
             className={cn(
-              "flex items-center gap-2 w-full px-4 py-1.5 text-xs text-muted-foreground light:text-white",
+              "flex items-center gap-2 w-full px-4 py-1.5 text-xs text-zinc-100",
               "bg-zinc-900/50 border border-[#27272a] rounded-md",
               "hover:border-[#3f3f46] transition-colors"
             )}
           >
-            <Search className="h-3.5 w-3.5" strokeWidth={1.5} />
+            <Search className="h-3.5 w-3.5 text-zinc-100" strokeWidth={1.5} />
             <span className="flex-1 text-left">Search...</span>
-            <kbd className="inline-flex h-5 items-center gap-1 rounded border border-[#27272a] bg-[#0c0c0e] px-1.5 font-mono text-[10px] text-muted-foreground light:text-white">
+            <kbd className="inline-flex h-5 items-center gap-1 rounded border border-[#27272a] bg-[#0c0c0e] px-1.5 font-mono text-[10px] text-zinc-100">
               <span className="text-xs">⌘</span>K
             </kbd>
           </button>
@@ -191,9 +191,9 @@ export function ContextHeader() {
               </span>
             </div>
             <div className="flex flex-col">
-              <span className="text-[11px] font-medium text-foreground light:text-white capitalize">{tier || 'User'}</span>
+              <span className="text-[11px] font-medium text-zinc-100 capitalize">{tier || 'User'}</span>
             </div>
-            <ChevronDown className="h-3 w-3 text-muted-foreground light:text-white" strokeWidth={1.5} />
+            <ChevronDown className="h-3 w-3 text-zinc-100" strokeWidth={1.5} />
           </div>
         </div>
       </div>
