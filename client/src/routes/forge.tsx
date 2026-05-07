@@ -91,7 +91,7 @@ function ForgePage() {
     if (!result.ok) {
       setStatus("error");
       toast.error("Send failed", {
-        description: result.error ?? "Server unreachable. Is the API on :3001?",
+        description: result.message ?? "Server unreachable. Is the API on :3001?",
       });
       setTimeout(() => setStatus("idle"), 3000);
       return;
@@ -155,7 +155,7 @@ function ForgePage() {
         senderName: user?.name ?? "Skerry",
       });
       if (!generated.ok || !generated.markdown) {
-        toast.error(generated.error ?? "AI generation failed on server.");
+        toast.error(generated.message ?? "AI generation failed on server.");
         return;
       }
       setEditedMd(generated.markdown);

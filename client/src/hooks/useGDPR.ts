@@ -22,7 +22,7 @@ export function useGDPR() {
       const response = await requestDataDeletion(leadId);
 
       if (!response.ok) {
-        throw new Error(response.error || "Löschantrag fehlgeschlagen");
+        throw new Error(response.message || "Löschantrag fehlgeschlagen");
       }
 
       setState(s => ({

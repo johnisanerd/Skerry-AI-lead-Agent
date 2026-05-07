@@ -44,7 +44,7 @@ export function useLeadEnrichment() {
         const response = await enrichLeads(leadIds);
 
         if (!response.ok) {
-          throw new Error(response.error || "Enrichment fehlgeschlagen");
+          throw new Error(response.message || "Enrichment fehlgeschlagen");
         }
 
         if (response.enriched) {

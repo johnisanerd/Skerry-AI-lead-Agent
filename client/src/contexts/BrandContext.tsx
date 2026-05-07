@@ -111,7 +111,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
     });
 
     if (!response.ok || !response.brand) {
-      throw new Error(response.error || "Failed to update brand settings");
+      throw new Error(response.message || "Failed to update brand settings");
     }
 
     const updatedBrand: BrandSettings = {

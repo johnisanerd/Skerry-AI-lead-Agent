@@ -1,9 +1,10 @@
 import { Outlet } from "@tanstack/react-router";
-import { Activity, User, LogOut, Code2, Settings } from "lucide-react";
+import { User, LogOut, Code2, Settings } from "lucide-react";
 import { useState, useEffect } from "react";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { AppSidebar } from "./AppSidebar";
+import { ContextHeader } from "./ContextHeader";
 import { Onboarding } from "./Onboarding";
 import { LoginPage } from "./LoginPage";
 import { FindLeadsModal } from "./FindLeadsModal";
@@ -20,6 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
 import { Link } from "@tanstack/react-router";
 
 export function Shell() {
@@ -57,6 +59,13 @@ export function Shell() {
     initializeTier();
   };
 
+  // Listen for the custom event from ContextHeader
+  useEffect(() => {
+    const handler = () => setShowFindLeads(true);
+    window.addEventListener("open-find-leads", handler);
+    return () => window.removeEventListener("open-find-leads", handler);
+  }, []);
+
   if (isHydrating) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
@@ -76,9 +85,9 @@ export function Shell() {
   const { brand, isLoading: isBrandLoading } = useBrand();
 
   const tierColors: Record<string, string> = {
-    solo: "border-slate-500/30 text-slate-400 bg-slate-500/5",
-    team: "border-blue-500/30 text-blue-400 bg-blue-500/5",
-    agency: "border-purple-500/30 text-purple-400 bg-purple-500/5",
+    solo: "border-muted text-muted-foreground",
+    team: "border-blue-500/30 text-blue-400",
+    agency: "border-purple-500/30 text-purple-400",
   };
 
   const initials = user?.name
@@ -92,77 +101,43 @@ export function Shell() {
 
   return (
     <SidebarProvider>
-      <div className="fixed inset-0 grid-bg pointer-events-none opacity-40 z-0" />
-      <div className="fixed inset-0 aura-bg pointer-events-none opacity-60 dark:opacity-25 z-0" />
       <div className="relative z-10 flex min-h-screen w-full text-foreground">
         <AppSidebar />
-        <div className="flex flex-1 flex-col">
-          <header
-            className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-white/5 bg-[#050505] px-5 text-white"
-            style={brand?.brandPrimaryColor ? { borderColor: brand.brandPrimaryColor } : undefined}
-          >
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Context Header with breadcrumbs and Cmd+K */}
+          <ContextHeader />
+
+          {/* Action Bar - Pipeline button as North Star CTA */}
+          <div className="flex items-center justify-between border-b border-border/50 px-4 h-12">
+            <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
+
             <div className="flex items-center gap-3">
-              <SidebarTrigger className="text-white/70 hover:text-white" />
-              <div className="hidden h-6 w-px bg-white/10 md:block" />
-              <div className="hidden flex-col leading-none md:flex">
-                <span className="text-[10px] uppercase tracking-[0.22em] text-white/60">
-                  {t("shell.eyebrow")}
-                </span>
-                <span className="flex items-center gap-2 text-xs font-medium text-white/90">
-                  {brand?.brandLogoUrl && (
-                    <img
-                      src={brand.brandLogoUrl}
-                      alt={brand.brandName}
-                      className="h-5 w-5 rounded-sm object-contain"
-                    />
-                  )}
-                  {brand?.brandName || t("shell.title")}
-                </span>
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-white/70 sm:flex">
-                <span className="relative flex h-1.5 w-1.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
-                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                </span>
-                {t("shell.systemNominal")}
-              </div>
-
-              <button
+              {/* Only prominent color-filled element - North Star CTA */}
+              <Button
                 onClick={() => setShowFindLeads(true)}
-                className="flex items-center gap-2 rounded-md bg-gradient-to-r from-purple-600 to-fuchsia-500 px-3.5 py-1.5 text-xs font-semibold text-white shadow-[0_0_30px_-8px_oklch(0.74_0.22_305_/_0.55)] transition hover:scale-[1.02] active:scale-[0.98]"
+                size="sm"
+                className="h-8 px-4 text-xs font-medium"
               >
-                <Activity className="h-3.5 w-3.5" />
                 {t("shell.runPipeline")}
-              </button>
+              </Button>
 
+              {/* User Menu - subtle outline only */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <button className="flex items-center gap-2 pl-2 border-l border-white/10 hover:opacity-80 transition">
+                  <button className="flex items-center gap-2 pl-3 border-l border-border/50 hover:bg-muted/30 transition-colors">
                     <div className="hidden flex-col items-end leading-none sm:flex">
-                      <span className="text-[10px] font-medium text-white">
+                      <span className="text-xs font-medium text-foreground">
                         {user?.name ?? "User"}
                       </span>
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <Badge
-                          variant="outline"
-                          className={`h-4 px-1 text-[8px] uppercase tracking-wider ${tierColors[tier] ?? tierColors.solo}`}
-                        >
-                          {tier}
-                        </Badge>
-                        {user?.role === "developer" && (
-                          <Badge
-                            variant="outline"
-                            className="h-4 px-1 text-[8px] uppercase tracking-wider border-purple-500/30 text-purple-400 bg-purple-500/5"
-                          >
-                            dev
-                          </Badge>
-                        )}
-                      </div>
+                      <Badge
+                        variant="outline"
+                        className={`h-4 px-1 text-[10px] uppercase tracking-wider border-muted-foreground/30 text-muted-foreground`}
+                      >
+                        {tier}
+                      </Badge>
                     </div>
-                    <Avatar className="h-8 w-8 border border-white/10 ring-1 ring-white/5">
-                      <AvatarFallback className="bg-gradient-to-br from-purple-600/30 to-fuchsia-500/20 text-[10px] font-semibold text-purple-200">
+                    <Avatar className="h-7 w-7 border border-border/50">
+                      <AvatarFallback className="bg-muted text-[10px] font-semibold text-muted-foreground">
                         {initials}
                       </AvatarFallback>
                     </Avatar>
@@ -170,7 +145,7 @@ export function Shell() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
                   align="end"
-                  className="w-48 bg-[#0a1628] border-white/10"
+                  className="w-48"
                 >
                   <div className="px-2 py-1.5">
                     <p className="text-xs font-medium text-foreground">
@@ -180,7 +155,7 @@ export function Shell() {
                       {user?.email}
                     </p>
                   </div>
-                  <DropdownMenuSeparator className="bg-white/5" />
+                  <DropdownMenuSeparator />
                   {user?.role === "developer" && (
                     <DropdownMenuItem
                       onClick={() => {
@@ -196,13 +171,13 @@ export function Shell() {
                   <DropdownMenuItem asChild>
                     <Link to="/settings" className="text-xs cursor-pointer">
                       <Settings className="mr-2 h-3.5 w-3.5" />
-                      Settings & API Keys
+                      Settings
                     </Link>
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator className="bg-white/5" />
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={logout}
-                    className="text-xs text-red-400 hover:text-red-300 cursor-pointer"
+                    className="text-xs text-destructive hover:text-destructive/80 cursor-pointer"
                   >
                     <LogOut className="mr-2 h-3.5 w-3.5" />
                     Sign Out
@@ -210,8 +185,9 @@ export function Shell() {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          </header>
-          <main className="flex-1 px-6 py-8">
+          </div>
+
+          <main className="flex-1 overflow-auto p-4">
             <Outlet />
           </main>
         </div>

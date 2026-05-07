@@ -22,6 +22,10 @@ const translations = {
     "sidebar.billing": "Billing",
     "sidebar.settings": "Settings",
     "sidebar.workspace": "Workspace",
+    "sidebar.group.campaigns": "Campaigns",
+    "sidebar.group.intelligence": "Intelligence",
+    "sidebar.group.operations": "Operations",
+    "sidebar.group.system": "System",
 
     // Shell / header
     "shell.eyebrow": "Lead Generation",

@@ -28,7 +28,7 @@ export function useBrandSettings(workspaceId: string) {
         const response = await getBrandSettings(workspaceId);
 
         if (!response.ok) {
-          throw new Error(response.error || "Konnte Branding-Einstellungen nicht laden");
+          throw new Error(response.message || "Konnte Branding-Einstellungen nicht laden");
         }
 
         setState(s => ({
@@ -58,7 +58,7 @@ export function useBrandSettings(workspaceId: string) {
         const response = await updateBrandSettings(workspaceId, merged);
 
         if (!response.ok) {
-          throw new Error(response.error || "Konnte Einstellungen nicht speichern");
+          throw new Error(response.message || "Konnte Einstellungen nicht speichern");
         }
 
         setState(s => ({

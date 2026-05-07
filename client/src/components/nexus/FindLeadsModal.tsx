@@ -113,7 +113,7 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
     const authorization = await authorizeResearchStart(targetCount);
     if (!authorization.ok) {
       toast.error(
-        authorization.error ??
+        authorization.message ??
           "Unable to start this research run. Please contact support or upgrade your plan."
       );
       setPhase("confirm");
@@ -135,7 +135,7 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
       targetAudience: profile?.targetAudience ?? "Growth-stage startups",
     });
     if (!generated.ok || !generated.leads) {
-      toast.error(generated.error ?? "Lead generation failed on server.");
+      toast.error(generated.message ?? "Lead generation failed on server.");
       setPhase("confirm");
       return;
     }

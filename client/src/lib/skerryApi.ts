@@ -36,14 +36,16 @@ interface VerifyResponse {
   valid: boolean;
   status: string;
   warning?: string;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 interface SendResponse {
   ok: boolean;
   id?: string;
   dryRun?: boolean;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 interface HealthResponse {
@@ -59,7 +61,8 @@ interface AuthResponse {
   ok: boolean;
   user?: AuthUser;
   csrfToken?: string;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 export interface EntitlementUsageResponse {
@@ -71,7 +74,8 @@ export interface EntitlementUsageResponse {
   runsRemaining?: number;
   maxLeadsPerRun?: number;
   requestedLeads?: number;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 export interface ServerGeneratedLead {
@@ -96,14 +100,16 @@ interface GenerateLeadsResponse {
   monthlyRuns?: number;
   runsRemaining?: number;
   maxLeadsPerRun?: number;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 interface GenerateEmailResponse {
   ok: boolean;
   source?: "openai" | "synthesizer";
   markdown?: string;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 async function apiPost<T>(path: string, body: unknown): Promise<T> {
@@ -122,9 +128,9 @@ let csrfTokenCache: string | null = null;
 
 function isCsrfFailure(payload: unknown): boolean {
   if (typeof payload !== "object" || payload === null) return false;
-  const maybeError = (payload as { error?: unknown }).error;
+  const maybeMessage = (payload as { message?: unknown }).message;
   return (
-    typeof maybeError === "string" && maybeError.toLowerCase().includes("csrf")
+    typeof maybeMessage === "string" && maybeMessage.toLowerCase().includes("csrf")
   );
 }
 
@@ -237,7 +243,7 @@ export async function verifyEmail(email: string): Promise<VerifyResponse> {
       ok: false,
       valid: false,
       status: "network_error",
-      error: String(err),
+      message: String(err),
     };
   }
 }
@@ -250,7 +256,7 @@ export async function sendEmail(args: {
   try {
     return await apiPost<SendResponse>("/api/email/send", args);
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -274,7 +280,7 @@ export async function authLogin(
     if (response.csrfToken) csrfTokenCache = response.csrfToken;
     return response;
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -284,7 +290,7 @@ export async function authSession(): Promise<AuthResponse> {
     if (response.csrfToken) csrfTokenCache = response.csrfToken;
     return response;
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -303,7 +309,7 @@ export async function getEntitlementUsage(): Promise<EntitlementUsageResponse> {
   try {
     return await apiGet<EntitlementUsageResponse>("/api/entitlements/usage");
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -318,7 +324,7 @@ export async function authorizeResearchStart(
       }
     );
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -330,7 +336,7 @@ export async function generateLeadsServer(args: {
   try {
     return await apiPost<GenerateLeadsResponse>("/api/leads/generate", args);
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -351,7 +357,7 @@ export async function generateEmailServer(args: {
   try {
     return await apiPost<GenerateEmailResponse>("/api/email/generate", args);
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -368,14 +374,15 @@ export interface EnrichLeadResponse {
   apiCallsUsed?: number;
   monthlyApiCalls?: number;
   apiCallsRemaining?: number;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 export async function enrichLeads(leadIds: string[]): Promise<EnrichLeadResponse> {
   try {
     return await apiPost<EnrichLeadResponse>("/api/leads/enrich", { leadIds });
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -383,14 +390,15 @@ interface PersistLeadsResponse {
   ok: boolean;
   persisted?: boolean;
   count?: number;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 export async function persistLeads(leads: ServerGeneratedLead[]): Promise<PersistLeadsResponse> {
   try {
     return await apiPost<PersistLeadsResponse>("/api/leads/persist", { leads });
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -398,7 +406,8 @@ export async function persistLeads(leads: ServerGeneratedLead[]): Promise<Persis
 export interface ExportLeadsResponse {
   ok: boolean;
   content?: string;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 export async function exportLeads(format: "csv" | "hubspot" | "salesforce" = "csv"): Promise<Blob | null> {
@@ -420,8 +429,8 @@ export async function exportLeads(format: "csv" | "hubspot" | "salesforce" = "cs
 interface GDPRDeletionResponse {
   ok: boolean;
   requestId?: string;
+  code?: string;
   message?: string;
-  error?: string;
 }
 
 export async function requestDataDeletion(leadId: string): Promise<GDPRDeletionResponse> {
@@ -431,7 +440,7 @@ export async function requestDataDeletion(leadId: string): Promise<GDPRDeletionR
       requestSource: "user_request",
     });
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -462,14 +471,15 @@ export interface BrandSettings {
 interface BrandResponse {
   ok: boolean;
   brand?: BrandSettings;
-  error?: string;
+  code?: string;
+  message?: string;
 }
 
 export async function getBrandSettings(workspaceId: string): Promise<BrandResponse> {
   try {
     return await apiGet<BrandResponse>(`/api/workspaces/${workspaceId}/brand`);
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
 
@@ -483,6 +493,6 @@ export async function updateBrandSettings(workspaceId: string, settings: BrandSe
       fromEmail: settings.from_email,
     });
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, message: String(err) };
   }
 }
