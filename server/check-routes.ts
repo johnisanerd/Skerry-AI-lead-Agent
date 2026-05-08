@@ -1,0 +1,204 @@
+/**
+ * CI Gate: Verify all API routes have validate() middleware
+ * 
+ * Run with: npx ts-node server/check-routes.ts
+ * Or add to package.json: "test:validation": "ts-node server/check-routes.ts"
+ */
+
+import { readFileSync } from "fs";
+import { join } from "path";
+
+interface RouteInfo {
+  method: string;
+  path: string;
+  hasValidate: boolean;
+  hasBodyValidation: boolean;
+  hasQueryValidation: boolean;
+  hasParamValidation: boolean;
+  lineNumber: number;
+}
+
+function extractRoutesFromFile(filePath: string): RouteInfo[] {
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+  const routes: RouteInfo[] = [];
+  
+  // Regex to match route definitions
+  const routeRegex = /^\s*(app|router)\.(get|post|put|patch|delete)\s*\(\s*["']([^"']+)["']/;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const match = line.match(routeRegex);
+    
+    if (match) {
+      const method = match[2].toUpperCase();
+      const path = match[3];
+      
+      // Look ahead for validate() in the middleware chain
+      let hasValidate = false;
+      let hasBodyValidation = false;
+      let hasQueryValidation = false;
+      let hasParamValidation = false;
+      
+      // Check current line and next few lines for validate
+      for (let j = i; j < Math.min(i + 15, lines.length); j++) {
+        const checkLine = lines[j];
+        
+        if (checkLine.includes("validate(")) {
+          hasValidate = true;
+          
+          // Check what type of validation
+          if (checkLine.includes("body:")) hasBodyValidation = true;
+          if (checkLine.includes("query:")) hasQueryValidation = true;
+          if (checkLine.includes("params:")) hasParamValidation = true;
+          
+          // Also check multi-line validate calls
+          if (checkLine.includes("validate({")) {
+            // Look ahead for validation types
+            for (let k = j; k < Math.min(j + 10, lines.length); k++) {
+              const futureLine = lines[k];
+              if (futureLine.includes("body:")) hasBodyValidation = true;
+              if (futureLine.includes("query:")) hasQueryValidation = true;
+              if (futureLine.includes("params:")) hasParamValidation = true;
+              if (futureLine.includes("})")) break;
+            }
+          }
+        }
+        
+        // Stop looking if we hit the handler function
+        if (checkLine.includes("asyncHandler") || 
+            (checkLine.includes("(req,") && !checkLine.includes("validate"))) {
+          break;
+        }
+      }
+      
+      routes.push({
+        method,
+        path,
+        hasValidate,
+        hasBodyValidation,
+        hasQueryValidation,
+        hasParamValidation,
+        lineNumber: i + 1,
+      });
+    }
+  }
+  
+  return routes;
+}
+
+function main() {
+  const indexPath = join(__dirname, "index.ts");
+  const routes = extractRoutesFromFile(indexPath);
+  
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  
+  console.log("\n🔍 Checking API route validation coverage...\n");
+  console.log(`Found ${routes.length} routes to check.\n`);
+  
+  // Check POST routes (must have body validation)
+  const postRoutes = routes.filter(r => r.method === "POST");
+  console.log(`📝 POST routes: ${postRoutes.length}`);
+  postRoutes.forEach(r => {
+    const status = r.hasValidate ? "✅" : "❌";
+    console.log(`  ${status} ${r.method} ${r.path} (line ${r.lineNumber})`);
+    if (!r.hasValidate) {
+      errors.push(`POST ${r.path} (line ${r.lineNumber}) - Missing validate() middleware`);
+    } else if (!r.hasBodyValidation) {
+      errors.push(`POST ${r.path} (line ${r.lineNumber}) - Missing body validation`);
+    }
+  });
+  
+  // Check PUT routes (must have body validation)
+  const putRoutes = routes.filter(r => r.method === "PUT");
+  console.log(`\n✏️  PUT routes: ${putRoutes.length}`);
+  putRoutes.forEach(r => {
+    const status = r.hasValidate ? "✅" : "❌";
+    console.log(`  ${status} ${r.method} ${r.path} (line ${r.lineNumber})`);
+    if (!r.hasValidate) {
+      errors.push(`PUT ${r.path} (line ${r.lineNumber}) - Missing validate() middleware`);
+    }
+  });
+  
+  // Check PATCH routes
+  const patchRoutes = routes.filter(r => r.method === "PATCH");
+  console.log(`\n🔧 PATCH routes: ${patchRoutes.length}`);
+  patchRoutes.forEach(r => {
+    const status = r.hasValidate ? "✅" : "❌";
+    console.log(`  ${status} ${r.method} ${r.path} (line ${r.lineNumber})`);
+    if (!r.hasValidate) {
+      errors.push(`PATCH ${r.path} (line ${r.lineNumber}) - Missing validate() middleware`);
+    }
+  });
+  
+  // Check DELETE routes (must have param validation if :id in path)
+  const deleteRoutes = routes.filter(r => r.method === "DELETE");
+  console.log(`\n🗑️  DELETE routes: ${deleteRoutes.length}`);
+  deleteRoutes.forEach(r => {
+    const status = r.hasValidate ? "✅" : "❌";
+    console.log(`  ${status} ${r.method} ${r.path} (line ${r.lineNumber})`);
+    if (!r.hasValidate) {
+      errors.push(`DELETE ${r.path} (line ${r.lineNumber}) - Missing validate() middleware`);
+    }
+  });
+  
+  // Check GET routes with query params
+  const getRoutes = routes.filter(r => r.method === "GET");
+  console.log(`\n🔍 GET routes: ${getRoutes.length}`);
+  const listRoutes = getRoutes.filter(r => 
+    r.path.includes("/leads") ||
+    r.path.includes("/sequences") ||
+    r.path.includes("/audit") ||
+    r.path.includes("/workspaces") ||
+    r.path.includes("/ab-tests") ||
+    r.path.includes("/export") ||
+    r.path.includes("/health")
+  );
+  
+  listRoutes.forEach(r => {
+    const status = r.hasQueryValidation ? "✅" : "⚠️ ";
+    console.log(`  ${status} ${r.method} ${r.path} (line ${r.lineNumber})`);
+    if (!r.hasQueryValidation) {
+      warnings.push(`GET ${r.path} (line ${r.lineNumber}) - Consider adding query validation`);
+    }
+  });
+  
+  // Check routes with :id params
+  const routesWithParams = routes.filter(r => r.path.includes(":"));
+  console.log(`\n🆔 Routes with params: ${routesWithParams.length}`);
+  routesWithParams.forEach(r => {
+    const status = r.hasParamValidation ? "✅" : "❌";
+    console.log(`  ${status} ${r.method} ${r.path} (line ${r.lineNumber})`);
+    if (!r.hasParamValidation) {
+      errors.push(`${r.method} ${r.path} (line ${r.lineNumber}) - Missing param validation for :id`);
+    }
+  });
+  
+  // Summary
+  console.log("\n" + "=".repeat(60));
+  
+  if (errors.length > 0) {
+    console.error("\n❌ OWASP A03 VALIDATION ERRORS:\n");
+    errors.forEach(err => console.error(`  - ${err}`));
+    console.error("\n⚠️  Please add validate() middleware to all routes!\n");
+  }
+  
+  if (warnings.length > 0) {
+    console.warn("\n⚠️  WARNINGS (consider fixing):\n");
+    warnings.forEach(warn => console.warn(`  - ${warn}`));
+    console.warn("");
+  }
+  
+  if (errors.length === 0 && warnings.length === 0) {
+    console.log("\n✅ All routes have proper validation middleware!\n");
+  } else if (errors.length === 0) {
+    console.log("\n✅ No critical errors. Consider addressing warnings.\n");
+  }
+  
+  console.log("=".repeat(60) + "\n");
+  
+  process.exit(errors.length > 0 ? 1 : 0);
+}
+
+main();

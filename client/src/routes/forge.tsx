@@ -17,6 +17,7 @@ import { useWorkspaceStore } from "@/store/workspaceStore";
 import { generateEmailServer, sendEmail } from "@/lib/skerryApi";
 import { useT } from "@/lib/i18n";
 import { toast } from "sonner";
+import { showErrorToast } from "@/lib/toastUtils";
 
 export const Route = createFileRoute("/forge")({
   head: () => ({
@@ -90,9 +91,7 @@ function ForgePage() {
 
     if (!result.ok) {
       setStatus("error");
-      toast.error("Send failed", {
-        description: result.message ?? "Server unreachable. Is the API on :3001?",
-      });
+      showErrorToast(result);
       setTimeout(() => setStatus("idle"), 3000);
       return;
     }

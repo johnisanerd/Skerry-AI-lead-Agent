@@ -40,6 +40,46 @@ Sentry.init({
     Sentry.httpIntegration(),
     Sentry.expressIntegration(),
   ],
+  // PII scrubbing: emails, API keys, lead names must never appear in Sentry
+  beforeSend(event) {
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const apiKeyRegex = /(api[_-]?key|apikey|authorization|bearer)\s*[:=]\s*[\w\-]{20,}/gi;
+
+    const scrubEmails = (s: string): string => s.replace(emailRegex, "[email-redacted]");
+    const scrubApiKeys = (s: string): string => s.replace(apiKeyRegex, "$1 [redacted]");
+
+    const scrubLeadNames = (obj: unknown): unknown => {
+      if (Array.isArray(obj)) return obj.map(scrubLeadNames);
+      if (obj !== null && typeof obj === "object") {
+        const result: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+          if (/name|firstName|lastName|fullName/i.test(key) && typeof value === "string") {
+            result[key] = "[name-redacted]";
+          } else {
+            result[key] = scrubLeadNames(value);
+          }
+        }
+        return result;
+      }
+      if (typeof obj === "string") return scrubEmails(scrubApiKeys(obj));
+      return obj;
+    };
+
+    if (event.message) event.message = scrubEmails(scrubApiKeys(event.message));
+    if (event.exception?.values) {
+      for (const exc of event.exception.values) {
+        if (exc.value) exc.value = scrubEmails(scrubApiKeys(exc.value));
+        if (exc.stacktrace?.frames) {
+          for (const frame of exc.stacktrace.frames) {
+            if (frame.vars) frame.vars = scrubLeadNames(frame.vars) as Record<string, unknown>;
+          }
+        }
+      }
+    }
+    if (event.request) event.request = scrubLeadNames(event.request) as typeof event.request;
+    if (event.extra) event.extra = scrubLeadNames(event.extra) as Record<string, unknown>;
+    return event;
+  },
 });
 
 import express from "express";
@@ -80,6 +120,7 @@ import { enrichLead } from "./pipeline/enrichmentService.js";
 import { calculateIntentScore } from "./pipeline/intentScorer.js";
 import { logEvent, makeRequestId } from "./lib/logger.js";
 import { getProvidersHealth } from "./lib/providerResilience.js";
+import { ErrorCode, createError } from "../shared/errors.js";
 import {
   validate,
   loginSchema,
@@ -475,7 +516,38 @@ function asyncHandler(
   ) => Promise<unknown>
 ): express.RequestHandler {
   return (req, res, next) => {
-    void fn(req, res, next).catch(next);
+    void fn(req, res, next).catch((err: unknown) => {
+      const requestId =
+        (req as any).ctx?.requestId ??
+        req.get("x-request-id") ??
+        makeRequestId();
+      
+      const status = err instanceof SyntaxError ? 400 : 500;
+      const message = err instanceof Error ? err.message : String(err);
+      
+      if (status >= 500) {
+        logEvent("error", "unhandled_async_error", {
+          requestId,
+          error: message,
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+          tags: { requestId },
+          extra: { path: req.path, method: req.method },
+        });
+      }
+      
+      if (!res.headersSent) {
+        const errorContract = createError(
+          ErrorCode.INTERNAL_ERROR,
+          process.env.NODE_ENV === "production" && status >= 500
+            ? "Internal server error."
+            : message,
+          requestId
+        );
+        res.status(status).json(errorContract);
+      }
+    });
   };
 }
 
@@ -1030,6 +1102,8 @@ export async function buildApp(): Promise<express.Express> {
     const requestId = req.get("x-request-id") || makeRequestId();
     (req as RequestWithContext).ctx = { requestId };
     res.setHeader("x-request-id", requestId);
+    // Set requestId as Sentry tag for every request
+    Sentry.getCurrentScope().setTag("requestId", requestId);
     const startedAt = Date.now();
     res.on("finish", () => {
       logEvent("info", "http_request", {
@@ -1053,109 +1127,8 @@ export async function buildApp(): Promise<express.Express> {
   });
 
   // ──────────── /api/auth/login
-  const loginSchema = z.object({
-    email: z.string().email().max(320),
-    password: z.string().min(1).max(512),
-  });
-  const entitlementStartSchema = z.object({
-    requestedLeads: z.coerce.number().int().positive().optional(),
-  });
-  const generateLeadsSchema = z.object({
-    businessDescription: z.string().max(5000).optional(),
-    targetAudience: z.string().max(2000).optional(),
-    requestedLeads: z.coerce.number().int().positive().optional(),
-  });
-  const generateEmailSchema = z.object({
-    lead: z
-      .object({
-        firstName: z.string().max(200).optional(),
-        lastName: z.string().max(200).optional(),
-        title: z.string().max(200).optional(),
-        organization: z
-          .object({ name: z.string().max(300).optional() })
-          .optional(),
-        websiteContext: z.string().max(5000).optional(),
-        personContext: z.string().max(5000).optional(),
-        uniqueAngles: z.array(z.string().max(200)).max(10).optional(),
-      })
-      .optional(),
-    businessDescription: z.string().max(5000).optional(),
-    senderName: z.string().max(200).optional(),
-    angle: z.string().max(300).optional(),
-  });
-  const verifyEmailSchema = z.object({
-    email: z.string().email().max(320),
-  });
-  const sendEmailSchema = z.object({
-    to: z.string().email().max(320),
-    subject: z.string().max(300).optional(),
-    bodyMarkdown: z.string().min(1).max(50000),
-  });
-
-  // ──────────── Additional Zod schemas for endpoints without validation
-  const enrichLeadsSchema = z.object({
-    leadIds: z.array(z.string().uuid()).min(1),
-  });
-
-  const persistLeadsSchema = z.object({
-    leads: z.array(z.any()).min(1),
-  });
-
-  const createSequenceSchema = z.object({
-    name: z.string().min(1).max(300),
-    steps: z.array(z.any()).min(1),
-  });
-
-  const enrollSequenceSchema = z.object({
-    leadId: z.string().uuid(),
-  });
-
-  const billingCheckoutSchema = z.object({
-    priceId: z.string().min(1),
-  });
-
-  const gdprDeletionRequestSchema = z.object({
-    leadId: z.string().uuid(),
-    requestSource: z.enum(["user_request", "bounce", "complaint"]).optional(),
-  });
-
-  const resendWebhookSchema = z.object({
-    events: z.array(z.any()).min(1),
-  });
-
-  const updateICPSchema = z.object({
-    business_description: z.string().max(5000).optional(),
-    ideal_customer: z.string().max(2000).optional(),
-    problem_solved: z.string().max(2000).optional(),
-  });
-
-  const updateBrandSchema = z.object({
-    brandName: z.string().max(300).optional(),
-    brandLogoUrl: z.string().url().optional().or(z.literal("")),
-    brandPrimaryColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
-    customDomain: z.string().optional(),
-    fromEmail: z.string().email().max(320).optional(),
-  });
-
-  const deleteWorkspaceSchema = z.object({
-    confirmation: z.literal("DELETE_WORKSPACE"),
-  });
-
-  const createABTestSchema = z.object({
-    sequenceId: z.string().uuid(),
-    stepNumber: z.coerce.number().int().positive(),
-    variants: z.array(z.any()).min(2),
-  });
-
-  const promoteABTestSchema = z.object({
-    winnerVariantId: z.string().uuid(),
-  });
-
-  const seedLeadsSchema = z.object({
-    count: z.coerce.number().int().positive().max(20).optional(),
-    businessDescription: z.string().max(5000).optional(),
-    targetAudience: z.string().max(2000).optional(),
-  });
+  // ──────────── /api/auth/login
+  // Note: Schemas are now imported from ./middleware/validation.js
 
   app.post("/api/auth/login", authLimiter, validate({ body: loginSchema }), (req, res) => {
     const { email, password } = (req as any).body as LoginBody;
@@ -1245,7 +1218,7 @@ export async function buildApp(): Promise<express.Express> {
   });
 
   // ──────────── /api/auth/logout
-  app.post("/api/auth/logout", (req, res) => {
+  app.post("/api/auth/logout", validate({ body: z.object({}) }), (req, res) => {
     clearAuthCookies(req, res);
     return res.json({ ok: true });
   });
@@ -1262,6 +1235,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get(
     "/api/workspaces",
     requireAuth,
+    validate({ query: workspacesQuerySchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -1332,6 +1306,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get(
     "/api/workspaces/:id/icp",
     requireAuth,
+    validate({ params: commonSchemas.workspaceIdParam }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -1370,7 +1345,7 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/workspaces/:id/icp",
     requireAuth,
-    validate({ body: updateICPSchema }),
+    validate({ params: commonSchemas.workspaceIdParam, body: updateICPSchema }),
     asyncHandler(async (req, res) => {
       const { business_description, ideal_customer, problem_solved } = (req as any).body;
       const user = getSessionUser(req);
@@ -1996,6 +1971,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get(
     "/api/ready",
     asyncHandler(async (_req, res) => {
+    validate({ query: healthQuerySchema }),
       if (!entitlementDb.isConfigured) {
         return res.status(200).json({ ok: true, database: "not_configured" });
       }
@@ -2010,7 +1986,7 @@ export async function buildApp(): Promise<express.Express> {
   );
 
   // ──────────── /api/health
-  app.get("/api/health", (_req, res) => {
+  app.get("/api/health", validate({ query: healthQuerySchema }), (_req, res) => {
     const hasApollo = Boolean(process.env.APOLLO_API_KEY);
     const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
     
@@ -2033,6 +2009,15 @@ export async function buildApp(): Promise<express.Express> {
       demo_mode: process.env.ALLOW_DEMO_AUTH === "true",
       ready_for_production: hasApollo && Boolean(process.env.SUPABASE_URL),
     });
+  });
+
+  // ──────────── /api/dev/test-exception (dev only, for Sentry testing)
+  app.get("/api/dev/test-exception", (req, res) => {
+    const requestId = getRequestId(req);
+    // This exception will be caught by Sentry and the custom error handler
+    throw new Error(
+      `Test exception from /api/dev/test-exception - requestId: ${requestId} - email: test@example.com - name: John Doe`
+    );
   });
 
   // ──────────── /api/billing/checkout
@@ -2100,7 +2085,9 @@ export async function buildApp(): Promise<express.Express> {
   // ──────────── /api/billing/webhook
   app.post(
     "/api/billing/webhook",
+    validate({ body: billingWebhookSchema }),
     asyncHandler(async (req, res) => {
+    validate({ body: billingWebhookSchema }),
       const stripeKey = process.env.STRIPE_SECRET_KEY;
       const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -2253,6 +2240,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get(
     "/api/sequences",
     requireAuth,
+    validate({ query: sequencesQuerySchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -2289,7 +2277,7 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/sequences/:id/enroll",
     requireAuth,
-    validate({ body: enrollSequenceSchema }),
+    validate({ params: commonSchemas.sequenceIdParam, body: enrollSequenceSchema }),
     asyncHandler(async (req, res) => {
       const { leadId } = (req as any).body;
       const user = getSessionUser(req);
@@ -2366,6 +2354,7 @@ export async function buildApp(): Promise<express.Express> {
   app.delete(
     "/api/sequences/:id/enrollments/:leadId",
     requireAuth,
+    validate({ params: commonSchemas.enrollmentParams }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -2457,6 +2446,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get(
     "/api/ab-tests/:id/results",
     requireAuth,
+    validate({ params: commonSchemas.abTestIdParam, query: abTestResultsQuerySchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -2525,7 +2515,7 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/ab-tests/:id/promote",
     requireAuth,
-    validate({ body: promoteABTestSchema }),
+    validate({ params: commonSchemas.abTestIdParam, body: promoteABTestSchema }),
     asyncHandler(async (req, res) => {
       const { winnerVariantId } = (req as any).body;
       const user = getSessionUser(req);
@@ -2570,6 +2560,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get(
     "/api/leads/export",
     requireAuth,
+    validate({ query: exportLeadsQuerySchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -2675,6 +2666,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get(
     "/api/audit/logs",
     requireAuth,
+    validate({ query: auditLogsQuerySchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -2715,6 +2707,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get(
     "/api/audit/logs/export",
     requireAuth,
+    validate({ query: auditLogsQuerySchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -2797,6 +2790,7 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/leads/:id/delete-request",
     requireAuth,
+    validate({ params: commonSchemas.leadIdParam }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -2891,6 +2885,7 @@ export async function buildApp(): Promise<express.Express> {
   app.get(
     "/api/workspaces/:id/data-export",
     requireAuth,
+    validate({ params: commonSchemas.workspaceIdParam }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -2951,7 +2946,7 @@ export async function buildApp(): Promise<express.Express> {
   app.delete(
     "/api/workspaces/:id/delete",
     requireAuth,
-    validate({ body: deleteWorkspaceSchema }),
+    validate({ params: commonSchemas.workspaceIdParam, body: deleteWorkspaceSchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
       if (!user) {
@@ -3000,7 +2995,9 @@ export async function buildApp(): Promise<express.Express> {
   // ──────────── /api/workspaces/:id/brand (public endpoint)
   app.get(
     "/api/workspaces/:id/brand",
+    validate({ params: commonSchemas.workspaceIdParam }),
     asyncHandler(async (req, res) => {
+    validate({ params: commonSchemas.workspaceIdParam }),
       const { id } = req.params as { id: string };
 
       if (!admin) {
@@ -3054,7 +3051,7 @@ export async function buildApp(): Promise<express.Express> {
   app.put(
     "/api/workspaces/:id/brand",
     requireAuth,
-    validate({ body: updateBrandSchema }),
+    validate({ params: commonSchemas.workspaceIdParam, body: updateBrandSchema }),
     asyncHandler(async (req, res) => {
       const { brandName, brandLogoUrl, brandPrimaryColor, customDomain, fromEmail } = (req as any).body;
       const user = getSessionUser(req);
@@ -3416,6 +3413,11 @@ export async function buildApp(): Promise<express.Express> {
           requestId,
           error: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
+        });
+        // Capture exception in Sentry with full context
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+          tags: { requestId },
+          extra: { path: req.path, method: req.method },
         });
       }
       if (!res.headersSent) {

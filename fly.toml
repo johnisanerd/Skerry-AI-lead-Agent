@@ -1,0 +1,119 @@
+# Fly.io configuration for Skerry AI Lead Agent
+# Defines two services: api and worker
+
+# Global settings
+app = "skerry-ai-lead-agent"
+primary_region = "fra"  # Frankfurt for EU users
+
+# API Service
+[services]
+  # API Service (HTTP)
+  [[services]]
+    protocol = "tcp"
+    internal_port = 3001
+    
+    [services.concurrency]
+      type = "connections"
+      hard_limit = 1000
+      soft_limit = 800
+    
+    [[services.ports]]
+      port = "443"
+      handlers = ["tls", "http"]
+    
+    [[services.ports]]
+      port = "80"
+      handlers = ["http"]
+    
+    [[services.tcp_checks]]
+      interval = "15s"
+      timeout = "5s"
+      grace_period = "5s"
+
+# Worker Service (Background Jobs)
+[[services]]
+  name = "worker"
+  protocol = "tcp"
+  internal_port = 3002
+  
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 50
+    soft_limit = 25
+  
+  # Health check for worker (optional HTTP health endpoint)
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "get"
+    path = "/health"
+    protocol = "http"
+
+# Environment variables for API
+[env]
+  NODE_ENV = "production"
+  PORT = "3001"
+
+# API Machine configuration
+[build]
+  builder = "nodejs"
+  [build.args]
+    NODE_VERSION = "20"
+
+# API Processes
+[processes]
+  api = "npm run start"
+  worker = "npm run worker"
+
+# API VM configuration
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  process = "api"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  process = "worker"
+
+# Mount for any persistent storage if needed
+# [[mounts]]
+#   source = "data"
+#   destination = "/data"
+#   process = ["api", "worker"]
+
+# Scaling configuration for API
+[[scaling]]
+  max_count = 3
+  min_count = 1
+  process = "api"
+
+# Worker should only have 1 instance (uses advisory locks for safety)
+[[scaling]]
+  max_count = 1
+  min_count = 1
+  process = "worker"
+
+# PostgreSQL database (Fly.io managed)
+[[services]]
+  name = "postgres"
+  protocol = "tcp"
+  internal_port = 5432
+  
+  [[services.ports]]
+    port = "5432"
+  
+# If using Fly Postgres, attach it:
+# fly postgres attach --app skerry-ai-lead-agent
+
+# Secrets that need to be set via: fly secrets set KEY=VALUE
+# SUPABASE_URL
+# SUPABASE_SERVICE_ROLE_KEY
+# OPENAI_API_KEY
+# RESEND_API_KEY
+# DATABASE_URL
+# SESSION_SECRET
+# STRIPE_SECRET_KEY
+# STRIPE_WEBHOOK_SECRET
+# And other required secrets...

@@ -1,0 +1,97 @@
+# Render.com configuration for Skerry AI Lead Agent
+# Defines two services: api (web) and worker (background)
+
+services:
+  # API Service (Web Service)
+  - type: web
+    name: skerry-api
+    env: node
+    plan: starter  # or standard, pro depending on needs
+    numInstances: 1  # Can scale horizontally with load balancer
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"
+      # Add all your secrets as environment variables
+      # These should be set in Render dashboard or via render secrets
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: APOLLO_API_KEY
+        sync: false
+      - key: NEVERBOUNCE_API_KEY
+        sync: false
+      - key: PUBLIC_APP_URL
+        value: https://skerry-api.onrender.com
+      - key: SENTRY_DSN
+        sync: false
+      - key: ALLOW_DEMO_AUTH
+        value: "false"
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    # Auto-deploy on push to main branch
+    autoDeploy: true
+    branch: main
+
+  # Worker Service (Background Worker)
+  - type: worker
+    name: skerry-worker
+    env: node
+    plan: starter  # or standard
+    numInstances: 1  # Keep at 1 - advisory locks prevent double execution if scaled
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: WORKER_TYPE
+        value: all  # or "sequence", "gdpr" for specialized workers
+      - key: WORKER_HEALTH_CHECK
+        value: "true"
+      - key: WORKER_HEALTH_PORT
+        value: "3002"
+      # Same secrets as API
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+    buildCommand: npm install && npm run build
+    startCommand: npm run worker
+    autoDeploy: true
+    branch: main
+
+# Optional: PostgreSQL database (if not using external DATABASE_URL)
+# databases:
+#   - name: skerry-db
+#     databaseName: skerry
+#     user: skerry
+#     plan: free  # or starter, standard
+
+# Optional: Redis for caching (if needed)
+# services:
+#   - type: redis
+#     name: skerry-redis
+#     plan: starter

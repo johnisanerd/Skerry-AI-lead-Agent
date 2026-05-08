@@ -4,6 +4,7 @@ import { useWorkspaceStore } from "@/store/workspaceStore";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useT } from "@/lib/i18n";
+import { showErrorToast, handleApiResponse } from "@/lib/toastUtils";
 
 export const Route = createFileRoute("/billing")({
   component: BillingPage,
@@ -82,9 +83,10 @@ function BillingPage() {
         return;
       }
 
-      toast.error(data.message ?? t("billing.toast.checkoutError"));
+      // Use the error code from the response to show proper error message
+      showErrorToast(data);
     } catch (err) {
-      toast.error(t("billing.toast.serverError"));
+      showErrorToast(err);
     } finally {
       setIsProcessing(null);
     }

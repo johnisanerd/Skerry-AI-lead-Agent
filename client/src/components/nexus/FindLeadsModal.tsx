@@ -27,6 +27,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
+import { showErrorToast } from "@/lib/toastUtils";
 
 interface FindLeadsModalProps {
   open: boolean;
@@ -111,9 +112,7 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
 
     const authorization = await authorizeResearchStart(targetCount);
     if (!authorization.ok) {
-      toast.error(
-        authorization.message ?? "Unable to start this research run. Please contact support or upgrade your plan."
-      );
+      showErrorToast(authorization);
       setPhase("confirm");
       return;
     }
@@ -133,7 +132,7 @@ export function FindLeadsModal({ open, onClose }: FindLeadsModalProps) {
       targetAudience: profile?.targetAudience ?? "Growth-stage startups",
     });
     if (!generated.ok || !generated.leads) {
-      toast.error(generated.message ?? "Lead generation failed on server.");
+      showErrorToast(generated);
       setPhase("confirm");
       return;
     }
