@@ -93,7 +93,9 @@ import { z } from "zod";
 import { EntitlementDb } from "./db";
 import { assertEnterpriseProductionConfig } from "./productionConfig";
 import { admin } from "./supabaseAdmin";
-import { createEnterpriseLimiters } from "./lib/rateLimit.js";
+// Use Upstash rate limiter with sliding window algorithm
+// Falls back to in-memory if UPSTASH_REDIS_URL is not set
+import { workspaceRateLimit, authRateLimit, isUpstashConfigured } from "./lib/upstashRateLimit.js";
 import { discoverLeads } from "./pipeline/discoveryRouter";
 import {
   handleResendWebhook,
@@ -142,6 +144,14 @@ import {
   createABTestSchema,
   promoteABTestSchema,
   seedLeadsSchema,
+  commonSchemas,
+  healthQuerySchema,
+  billingWebhookSchema,
+  sequencesQuerySchema,
+  abTestResultsQuerySchema,
+  exportLeadsQuerySchema,
+  auditLogsQuerySchema,
+  workspacesQuerySchema,
 } from "./middleware/validation.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1027,9 +1037,20 @@ export async function buildApp(): Promise<express.Express> {
   });
   await entitlementDb.init();
 
-  // Initialize enterprise rate limiters with PostgreSQL-backed store
-  // Requires DATABASE_URL to be set for distributed rate limiting
-  const enterpriseLimiters = createEnterpriseLimiters(entitlementDb.getPool());
+  // Initialize Upstash rate limiter with sliding window
+  // - Workspace-level: rl:workspace:{workspaceId}:{endpoint}
+  // - User-level on auth endpoints (Login 5/15min, Password-Reset 3/h)
+  // - Falls back to in-memory if UPSTASH_REDIS_URL not set
+  const useUpstash = isUpstashConfigured();
+  console.log(`[RateLimit] Using ${useUpstash ? "Upstash Redis" : "in-memory fallback"} for rate limiting`);
+
+  // Workspace-level rate limiter for all /api/* endpoints
+  const workspaceLimiter = workspaceRateLimit("global");
+
+  // Auth-level rate limiters
+  const loginLimiter = authRateLimit("login");
+  const passwordResetLimiter = authRateLimit("password-reset");
+  const registerLimiter = authRateLimit("register");
 
   const isProd = process.env.NODE_ENV === "production";
   const scriptSrc = ["'self'"];
@@ -1064,13 +1085,8 @@ export async function buildApp(): Promise<express.Express> {
   );
   app.use(express.json({ limit: "1mb" }));
   
-  // Enterprise rate limiting with PostgreSQL-backed distributed store
-  // Scoped by workspace/user/API key instead of just IP
-  app.use(enterpriseLimiters.global);
-  
-  const authLimiter = enterpriseLimiters.auth;
-  const llmLimiter = enterpriseLimiters.llm;
-  // leadsLimiter available as enterpriseLimiters.leads if needed for specific routes
+  // Apply workspace-level rate limiting to all API routes
+  app.use("/api", workspaceLimiter);
 
   // Default: reflect any Origin (dev). Set SKERRY_ALLOWED_ORIGINS to restrict credentialed API.
   app.use((req, res, next) => {
@@ -1130,7 +1146,7 @@ export async function buildApp(): Promise<express.Express> {
   // ──────────── /api/auth/login
   // Note: Schemas are now imported from ./middleware/validation.js
 
-  app.post("/api/auth/login", authLimiter, validate({ body: loginSchema }), (req, res) => {
+  app.post("/api/auth/login", loginLimiter, validate({ body: loginSchema }), (req, res) => {
     const { email, password } = (req as any).body as LoginBody;
     if (!ALLOW_DEMO_AUTH) {
       return unifiedError(
@@ -1505,7 +1521,6 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/leads/generate",
     requireAuth,
-    llmLimiter,
     validate({ body: generateLeadsSchema }),
     asyncHandler(async (req, res) => {
       const user = getSessionUser(req);
@@ -1883,7 +1898,6 @@ export async function buildApp(): Promise<express.Express> {
   app.post(
     "/api/email/generate",
     requireAuth,
-    llmLimiter,
     validate({ body: generateEmailSchema }),
     asyncHandler(async (req, res) => {
       const body = (req as any).body as GenerateEmailBody;
@@ -1970,8 +1984,8 @@ export async function buildApp(): Promise<express.Express> {
   // ──────────── /api/ready (DB ping when DATABASE_URL is set; for orchestrator readiness probes)
   app.get(
     "/api/ready",
-    asyncHandler(async (_req, res) => {
     validate({ query: healthQuerySchema }),
+    asyncHandler(async (_req, res) => {
       if (!entitlementDb.isConfigured) {
         return res.status(200).json({ ok: true, database: "not_configured" });
       }
@@ -2087,7 +2101,6 @@ export async function buildApp(): Promise<express.Express> {
     "/api/billing/webhook",
     validate({ body: billingWebhookSchema }),
     asyncHandler(async (req, res) => {
-    validate({ body: billingWebhookSchema }),
       const stripeKey = process.env.STRIPE_SECRET_KEY;
       const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -2997,7 +3010,6 @@ export async function buildApp(): Promise<express.Express> {
     "/api/workspaces/:id/brand",
     validate({ params: commonSchemas.workspaceIdParam }),
     asyncHandler(async (req, res) => {
-    validate({ params: commonSchemas.workspaceIdParam }),
       const { id } = req.params as { id: string };
 
       if (!admin) {
