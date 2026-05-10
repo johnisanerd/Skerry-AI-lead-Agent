@@ -1,5 +1,6 @@
 ---
 import "@/styles/global.css";
+import { detectLang, type Lang } from "@/lib/i18n";
 
 interface Props {
   title?: string;
@@ -18,10 +19,26 @@ const {
 const site = import.meta.env.PUBLIC_SITE_URL ?? "https://skerry.cloud";
 const canonical = new URL(canonicalPath, site).toString();
 const ogImage = new URL("/og.png", site).toString();
+
+// Server-side language detection (URL param > cookie > Accept-Language).
+const lang: Lang = detectLang(Astro.request);
+
+// Persist via cookie so the choice survives reloads.
+Astro.cookies.set("lang", lang, {
+  path: "/",
+  maxAge: 60 * 60 * 24 * 365,
+  sameSite: "lax",
+});
+
+// Theme is read from cookie if present; default dark. The pre-paint
+// inline script below applies it before paint to avoid a flash.
+const themeCookie = Astro.cookies.get("theme")?.value;
+const initialTheme: "light" | "dark" =
+  themeCookie === "light" || themeCookie === "dark" ? themeCookie : "dark";
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang={lang} class={initialTheme}>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -59,8 +76,25 @@ const ogImage = new URL("/og.png", site).toString();
     />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
     />
+
+    <!-- Pre-paint theme bootstrap so toggling localStorage choice survives
+         reloads without a flash. The cookie is the SSR source of truth;
+         localStorage is a client-only mirror. -->
+    <script is:inline>
+      (function () {
+        try {
+          var stored = localStorage.getItem("theme");
+          if (stored === "light" || stored === "dark") {
+            document.documentElement.classList.remove("light", "dark");
+            document.documentElement.classList.add(stored);
+            document.cookie =
+              "theme=" + stored + ";path=/;max-age=31536000;samesite=lax";
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <slot />

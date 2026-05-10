@@ -3,6 +3,13 @@ import { useState, useEffect } from "react";
 interface Props {
   variant?: "primary" | "compact";
   ctaLabel?: string;
+  placeholder?: string;
+  successTitle?: string;
+  successCopyNew?: string;
+  successCopyDup?: string;
+  successCta?: string;
+  successNote?: string;
+  errorGeneric?: string;
 }
 
 interface SubmitResult {
@@ -15,9 +22,16 @@ interface SubmitResult {
 export default function WaitlistForm({
   variant = "primary",
   ctaLabel = "Join the waitlist",
+  placeholder = "you@company.com",
+  successTitle = "You're in",
+  successCopyNew = "Confirmation email on the way.",
+  successCopyDup = "You were already on the list — good thing we double-check.",
+  successCta = "Skip the queue — €19 founding spot →",
+  successNote = "Refundable. 50% off lifetime when we open.",
+  errorGeneric = "Couldn't join — try again.",
 }: Props) {
   const [email, setEmail] = useState("");
-  const [hp, setHp] = useState(""); // honeypot
+  const [hp, setHp] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "ok" | "error">(
     "idle"
   );
@@ -55,38 +69,34 @@ export default function WaitlistForm({
       const json = (await resp.json()) as SubmitResult;
       if (!resp.ok || !json.ok) {
         setStatus("error");
-        setResult({ ok: false, message: json.message ?? "Something went wrong." });
+        setResult({ ok: false, message: json.message ?? errorGeneric });
         return;
       }
       setStatus("ok");
       setResult(json);
     } catch {
       setStatus("error");
-      setResult({ ok: false, message: "Network error. Try again?" });
+      setResult({ ok: false, message: errorGeneric });
     }
   }
 
   if (status === "ok" && result?.ok) {
     return (
       <div className="panel p-6 text-center">
-        <div className="eyebrow">You're in</div>
-        <div className="mt-2 text-3xl font-semibold text-white">
+        <div className="eyebrow">{successTitle}</div>
+        <div className="heading mt-2 text-3xl font-bold">
           #{result.position}
         </div>
-        <p className="mt-2 text-sm text-slate-300">
-          {result.alreadyOnList
-            ? "You were already on the list — good thing we double-check."
-            : "Confirmation email on the way."}
+        <p className="body-text mt-2 text-sm">
+          {result.alreadyOnList ? successCopyDup : successCopyNew}
         </p>
         <a
           href={`/founding?email=${encodeURIComponent(email)}`}
           className="btn-primary mt-5"
         >
-          Skip the queue — €19 founding spot →
+          {successCta}
         </a>
-        <p className="mt-3 text-xs text-slate-400">
-          Refundable. 50% off lifetime when we open.
-        </p>
+        <p className="muted-text mt-3 text-xs">{successNote}</p>
       </div>
     );
   }
@@ -106,14 +116,13 @@ export default function WaitlistForm({
         required
         autoComplete="email"
         inputMode="email"
-        placeholder="you@company.com"
+        placeholder={placeholder}
         value={email}
         onChange={(e) => setEmail(e.target.value)}
         disabled={status === "loading"}
-        className="flex-1 rounded-md bg-transparent px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:ring-2 focus:ring-brand-400/50"
+        className="flex-1 rounded-md bg-transparent px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-400/50 placeholder:text-zinc-500 dark:placeholder:text-slate-500 [color:var(--fg)]"
         aria-label="Email address"
       />
-      {/* Honeypot — visually hidden, real users never see/touch it. */}
       <input
         type="text"
         name="company_website"
@@ -129,14 +138,14 @@ export default function WaitlistForm({
         className="btn-primary whitespace-nowrap"
         disabled={status === "loading"}
       >
-        {status === "loading" ? "Joining…" : ctaLabel}
+        {status === "loading" ? "…" : ctaLabel}
       </button>
       {status === "error" && (
         <div
           role="alert"
-          className="text-xs text-amber-300 sm:absolute sm:-bottom-6 sm:left-3"
+          className="text-xs text-amber-500 dark:text-amber-300 sm:absolute sm:-bottom-6 sm:left-3"
         >
-          {result?.message ?? "Couldn't join — try again."}
+          {result?.message ?? errorGeneric}
         </div>
       )}
     </form>

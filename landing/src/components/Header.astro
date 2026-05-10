@@ -1,0 +1,64 @@
+---
+import Wordmark from "@/components/Wordmark.astro";
+import ThemeToggle from "@/components/ThemeToggle.tsx";
+import LanguageToggle from "@/components/LanguageToggle.tsx";
+import { t, type Lang } from "@/lib/i18n";
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+---
+
+<header class="sticky top-4 z-40 px-4 sm:top-6 sm:px-6">
+  <div class="mx-auto max-w-6xl">
+    <nav
+      class="nav-pill flex items-center justify-between gap-4 px-3 py-2.5 sm:px-5 sm:py-3"
+      aria-label="Primary"
+    >
+      <a href="/" class="flex items-center transition hover:opacity-90">
+        <Wordmark size="md" collapseOnMobile />
+      </a>
+
+      <div
+        class="hidden items-center gap-7 text-sm font-medium md:flex"
+        style="color: var(--fg-soft);"
+      >
+        <a href="#features" class="transition hover:[color:var(--fg)]">
+          {t(lang, "nav.features")}
+        </a>
+        <a href="#demo" class="transition hover:[color:var(--fg)]">
+          {t(lang, "nav.demo")}
+        </a>
+        <a href="#faq" class="transition hover:[color:var(--fg)]">
+          {t(lang, "nav.faq")}
+        </a>
+      </div>
+
+      <div class="flex items-center gap-2 sm:gap-3">
+        <LanguageToggle client:load />
+        <ThemeToggle client:load />
+        <a
+          href="#waitlist"
+          class="inline-flex items-center gap-1.5 rounded-full bg-brand-gradient px-3.5 py-2 text-xs font-semibold text-ink-900 shadow-[0_0_24px_-6px_rgba(167,139,250,0.7)] transition hover:scale-[1.03] sm:px-4 sm:text-sm"
+        >
+          <span class="hidden sm:inline">{t(lang, "nav.cta")}</span>
+          <span class="sm:hidden">→</span>
+          <svg
+            viewBox="0 0 24 24"
+            class="h-3.5 w-3.5"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M5 12h14M13 6l6 6-6 6"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"></path>
+          </svg>
+        </a>
+      </div>
+    </nav>
+  </div>
+</header>

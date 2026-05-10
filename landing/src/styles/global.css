@@ -3,7 +3,31 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: light;
+  --bg: #fafafa;
+  --bg-soft: #f4f4f5;
+  --fg: #18181b;
+  --fg-soft: #3f3f46;
+  --fg-muted: #71717a;
+  --border: rgba(0, 0, 0, 0.08);
+  --panel: rgba(255, 255, 255, 0.6);
+  --panel-strong: rgba(255, 255, 255, 0.78);
+  --bg-radial-1: rgba(167, 139, 250, 0.1);
+  --bg-radial-2: rgba(196, 181, 253, 0.06);
+}
+
+html.dark {
   color-scheme: dark;
+  --bg: #06030d;
+  --bg-soft: #0d0817;
+  --fg: #f8fafc;
+  --fg-soft: #cbd5e1;
+  --fg-muted: #94a3b8;
+  --border: rgba(255, 255, 255, 0.08);
+  --panel: rgba(255, 255, 255, 0.04);
+  --panel-strong: rgba(255, 255, 255, 0.06);
+  --bg-radial-1: rgba(167, 139, 250, 0.22);
+  --bg-radial-2: rgba(196, 181, 253, 0.14);
 }
 
 html {
@@ -11,18 +35,20 @@ html {
 }
 
 body {
-  @apply bg-ink-900 text-slate-200 font-sans antialiased;
+  background-color: var(--bg);
+  color: var(--fg-soft);
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   background-image:
-    radial-gradient(
-      circle at 15% -10%,
-      rgba(167, 139, 250, 0.22),
-      transparent 45%
-    ),
-    radial-gradient(
-      circle at 85% 8%,
-      rgba(196, 181, 253, 0.14),
-      transparent 50%
-    );
+    radial-gradient(circle at 15% -10%, var(--bg-radial-1), transparent 45%),
+    radial-gradient(circle at 85% 8%, var(--bg-radial-2), transparent 50%);
 }
 
 @layer components {
@@ -40,16 +66,103 @@ body {
 
   .btn-ghost {
     @apply inline-flex items-center justify-center rounded-md
-           border border-white/10 bg-white/5 px-5 py-3 text-sm
-           font-medium text-slate-200 transition hover:bg-white/10
-           disabled:opacity-50;
+           border border-zinc-300/60 bg-white/60 px-5 py-3 text-sm
+           font-medium text-zinc-800 transition hover:bg-white/80
+           disabled:opacity-50
+           dark:border-white/10 dark:bg-white/5 dark:text-slate-200
+           dark:hover:bg-white/10;
   }
 
   .panel {
-    @apply rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl;
+    @apply rounded-2xl border backdrop-blur-xl;
+    background-color: var(--panel);
+    border-color: var(--border);
+  }
+
+  .panel-strong {
+    @apply rounded-2xl border backdrop-blur-xl;
+    background-color: var(--panel-strong);
+    border-color: var(--border);
+  }
+
+  .nav-pill {
+    @apply rounded-full border backdrop-blur-xl;
+    background-color: var(--panel-strong);
+    border-color: var(--border);
   }
 
   .eyebrow {
-    @apply text-[11px] uppercase tracking-[0.22em] text-brand-300/85;
+    @apply text-[11px] uppercase tracking-[0.22em];
+    color: rgb(124 58 237 / 0.95);
+  }
+  html.dark .eyebrow {
+    color: rgb(196 181 253 / 0.95);
+  }
+
+  .heading {
+    color: var(--fg);
+  }
+  .body-text {
+    color: var(--fg-soft);
+  }
+  .muted-text {
+    color: var(--fg-muted);
+  }
+}
+
+@layer utilities {
+  .glow-sm {
+    filter: drop-shadow(0 0 8px rgba(167, 139, 250, 0.55));
+  }
+  .glow-md {
+    filter: drop-shadow(0 0 14px rgba(167, 139, 250, 0.7))
+      drop-shadow(0 0 32px rgba(167, 139, 250, 0.35));
+  }
+  .glow-lg {
+    filter: drop-shadow(0 0 18px rgba(167, 139, 250, 0.75))
+      drop-shadow(0 0 48px rgba(167, 139, 250, 0.45))
+      drop-shadow(0 0 80px rgba(167, 139, 250, 0.25));
+  }
+
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(0.95);
+      opacity: 0.7;
+    }
+    70% {
+      transform: scale(1.5);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(1.5);
+      opacity: 0;
+    }
+  }
+  @keyframes slide-in-up {
+    from {
+      transform: translateY(8px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .animate-slide-in-up {
+    animation: slide-in-up 0.45s cubic-bezier(0.21, 1.02, 0.73, 1) both;
+  }
+  .animate-fade-in {
+    animation: fade-in 0.6s ease both;
+  }
+  .animate-pulse-ring {
+    animation: pulse-ring 2.6s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
   }
 }
