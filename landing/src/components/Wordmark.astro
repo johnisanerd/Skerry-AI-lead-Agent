@@ -24,31 +24,31 @@ const {
 } = Astro.props;
 
 const sizeClass = {
-  sm: "text-sm",
-  md: "text-base",
-  lg: "text-2xl",
-  xl: "text-4xl sm:text-5xl",
+  sm: "text-base",
+  md: "text-xl",
+  lg: "text-3xl",
+  xl: "text-5xl sm:text-6xl",
 }[size];
 ---
 
 <span
   class:list={[
-    "inline-flex items-center gap-x-1.5 font-semibold tracking-tight text-white leading-none",
+    "inline-flex items-center gap-x-[0.28em] font-semibold tracking-tight text-white leading-none",
     sizeClass,
     className,
   ]}
 >
   <span>Skerry</span>
   <span class:list={[collapseOnMobile && "hidden sm:inline"]}>LeadGen</span>
-  <span class="inline-flex items-center gap-x-[0.06em]">
+  <span class="inline-flex items-center">
     <img
       src="/logo.png"
       alt=""
       aria-hidden="true"
-      class="h-[1.7em] w-[1.7em] select-none drop-shadow-[0_0_8px_rgba(167,139,250,0.9)] drop-shadow-[0_0_24px_rgba(167,139,250,0.55)]"
+      class="h-[1.7em] w-[1.7em] select-none drop-shadow-[0_0_10px_rgba(167,139,250,0.95)] drop-shadow-[0_0_28px_rgba(167,139,250,0.55)]"
       width="48"
       height="48"
     />
-    <span>S</span>
+    <span class="-ml-[0.4em]">S</span>
   </span>
 </span>
