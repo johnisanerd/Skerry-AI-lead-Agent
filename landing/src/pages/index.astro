@@ -5,7 +5,7 @@ import WaitlistForm from "@/components/WaitlistForm.tsx";
 import FoundingDepositCTA from "@/components/FoundingDepositCTA.tsx";
 import LeadPulse from "@/components/LeadPulse.tsx";
 import AgentDemo from "@/components/AgentDemo.tsx";
-import { detectLang, t, type StringKey } from "@/lib/i18n";
+import { detectLang, t } from "@/lib/i18n";
 
 const lang = detectLang(Astro.request);
 
@@ -20,15 +20,9 @@ const steps = (
 
 interface Plan {
   name: string;
-  whoKey:
-    | "plans.solo.who"
-    | "plans.team.who"
-    | "plans.agency.who"
-    | "plans.enterprise.who";
+  whoKey: "plans.solo.who" | "plans.team.who" | "plans.agency.who";
   price: string;
-  priceNote?: string;
   highlight: boolean;
-  isEnterprise?: boolean;
   features: string[];
 }
 
@@ -69,21 +63,6 @@ const plans: Plan[] = [
       "Priority support",
     ],
   },
-  {
-    name: "Enterprise",
-    whoKey: "plans.enterprise.who",
-    price: t(lang, "plans.enterprise.priceLabel"),
-    priceNote: t(lang, "plans.enterprise.priceNote"),
-    highlight: false,
-    isEnterprise: true,
-    features: [
-      t(lang, "plans.feat.seats"),
-      t(lang, "plans.feat.sso"),
-      t(lang, "plans.feat.sla"),
-      t(lang, "plans.feat.am"),
-      t(lang, "plans.feat.api"),
-    ],
-  },
 ];
 
 const faqItems = (
@@ -97,29 +76,6 @@ const faqItems = (
   ] as const
 );
 
-interface EnterpriseCard {
-  icon: "shield" | "support" | "integration";
-  titleKey: StringKey;
-  bodyKey: StringKey;
-}
-
-const enterpriseCards: EnterpriseCard[] = [
-  {
-    icon: "shield",
-    titleKey: "enterprise.security.title",
-    bodyKey: "enterprise.security.body",
-  },
-  {
-    icon: "support",
-    titleKey: "enterprise.support.title",
-    bodyKey: "enterprise.support.body",
-  },
-  {
-    icon: "integration",
-    titleKey: "enterprise.integration.title",
-    bodyKey: "enterprise.integration.body",
-  },
-];
 ---
 
 <Layout>
@@ -164,8 +120,6 @@ const enterpriseCards: EnterpriseCard[] = [
             t(lang, "hero.badge.gdpr"),
             t(lang, "hero.badge.apollo"),
             t(lang, "hero.badge.instantly"),
-            t(lang, "hero.badge.soc2"),
-            t(lang, "hero.badge.iso27001"),
           ].map((label) => (
             <span class="flex items-center gap-2">
               <svg
@@ -326,7 +280,7 @@ const enterpriseCards: EnterpriseCard[] = [
       </h2>
       <p class="muted-text mt-3 text-sm">{t(lang, "plans.subtitle")}</p>
     </div>
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="grid gap-4 lg:grid-cols-3">
       {plans.map((plan) => (
         <div
           class={`panel flex flex-col p-6 ${plan.highlight ? "ring-1 ring-brand-400/40" : ""}`}
@@ -340,9 +294,7 @@ const enterpriseCards: EnterpriseCard[] = [
           <div class="muted-text mt-1 text-xs">{t(lang, plan.whoKey)}</div>
           <div class="mt-5 flex items-baseline gap-1">
             <span class="heading text-3xl font-bold">{plan.price}</span>
-            <span class="muted-text text-xs">
-              {plan.isEnterprise ? plan.priceNote : "/mo"}
-            </span>
+            <span class="muted-text text-xs">/mo</span>
           </div>
           <ul class="body-text mt-5 flex-1 space-y-2 text-sm">
             {plan.features.map((f) => (
@@ -352,136 +304,9 @@ const enterpriseCards: EnterpriseCard[] = [
               </li>
             ))}
           </ul>
-          {plan.isEnterprise && (
-            <a
-              href="#enterprise-cta"
-              class="mt-5 inline-flex w-full items-center justify-center rounded-md border border-brand-500/40 bg-brand-500/[0.08] px-3 py-2 text-xs font-semibold text-brand-700 transition hover:bg-brand-500/[0.14] dark:text-brand-200"
-            >
-              {t(lang, "plans.enterprise.cta")}
-            </a>
-          )}
         </div>
       ))}
     </div>
-  </section>
-
-  <!-- ENTERPRISE -->
-  <section id="enterprise" class="mx-auto max-w-6xl px-6 pb-24">
-    <div class="mb-10 max-w-3xl">
-      <span class="eyebrow">{t(lang, "enterprise.eyebrow")}</span>
-      <h2 class="heading mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
-        {t(lang, "enterprise.title.before")}
-        <span class="text-gradient-brand">
-          {t(lang, "enterprise.title.accent")}
-        </span>
-      </h2>
-      <p class="body-text mt-4 text-base leading-relaxed">
-        {t(lang, "enterprise.subtitle")}
-      </p>
-    </div>
-    <div class="grid gap-4 lg:grid-cols-3">
-      {enterpriseCards.map((card) => (
-        <div class="panel flex flex-col p-6">
-          <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-brand-500/10 text-brand-600 dark:text-brand-300">
-            {card.icon === "shield" && (
-              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M12 3 4 6v6c0 4.5 3.4 8.5 8 9 4.6-.5 8-4.5 8-9V6l-8-3Z"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linejoin="round"
-                />
-                <path
-                  d="m9 12 2 2 4-4"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            )}
-            {card.icon === "support" && (
-              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M21 11.5a8.5 8.5 0 1 0-3.5 6.9l3.5.6-1-3.4A8.5 8.5 0 0 0 21 11.5Z"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linejoin="round"
-                />
-                <circle cx="8.5" cy="11.5" r="1" fill="currentColor" />
-                <circle cx="12" cy="11.5" r="1" fill="currentColor" />
-                <circle cx="15.5" cy="11.5" r="1" fill="currentColor" />
-              </svg>
-            )}
-            {card.icon === "integration" && (
-              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M9 7V4h6v3M9 17v3h6v-3M4 12h3m10 0h3M7 7l3 3m4 4 3 3M17 7l-3 3m-4 4-3 3"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            )}
-          </div>
-          <h3 class="heading text-base font-semibold">{t(lang, card.titleKey)}</h3>
-          <p class="muted-text mt-2 text-sm leading-relaxed">
-            {t(lang, card.bodyKey)}
-          </p>
-        </div>
-      ))}
-    </div>
-
-    <!-- Enterprise CTA -->
-    <div
-      id="enterprise-cta"
-      class="mt-10 flex flex-col items-start justify-between gap-6 rounded-3xl border p-8 sm:flex-row sm:items-center lg:p-10"
-      style="border-color: rgba(167,139,250,0.25); background: linear-gradient(135deg, rgba(139,92,246,0.08), rgba(196,181,253,0.02));"
-    >
-      <div class="max-w-xl">
-        <h3 class="heading text-xl font-bold sm:text-2xl">
-          {t(lang, "enterprise.cta.title")}
-        </h3>
-        <p class="muted-text mt-2 text-sm">
-          {t(lang, "enterprise.cta.subtitle")}
-        </p>
-      </div>
-      <a
-        href="mailto:sales@skerry.cloud?subject=Enterprise%20inquiry"
-        class="inline-flex shrink-0 items-center gap-2 rounded-full bg-brand-gradient px-5 py-3 text-sm font-semibold text-ink-900 shadow-[0_0_28px_-6px_rgba(167,139,250,0.7)] transition hover:scale-[1.03]"
-      >
-        {t(lang, "enterprise.cta.button")}
-      </a>
-    </div>
-  </section>
-
-  <!-- TRUST -->
-  <section class="mx-auto max-w-6xl px-6 pb-24">
-    <div class="text-center">
-      <span class="eyebrow">{t(lang, "trust.eyebrow")}</span>
-      <h2
-        class="heading mt-3 text-2xl font-bold tracking-tight sm:text-3xl"
-      >
-        {t(lang, "trust.title")}
-      </h2>
-    </div>
-    <div
-      class="mt-8 grid grid-cols-2 items-center justify-items-center gap-6 sm:grid-cols-3 lg:grid-cols-6"
-      style="filter: grayscale(1); opacity: 0.55;"
-    >
-      {Array.from({ length: 6 }).map(() => (
-        <div
-          class="flex h-10 w-full items-center justify-center rounded-md border text-[10px] font-semibold uppercase tracking-[0.2em]"
-          style="border-color: var(--border); color: var(--fg-muted);"
-        >
-          YOUR LOGO
-        </div>
-      ))}
-    </div>
-    <p class="muted-text mx-auto mt-6 max-w-2xl text-center text-xs italic">
-      {t(lang, "trust.placeholder")}
-    </p>
   </section>
 
   <!-- FAQ -->
