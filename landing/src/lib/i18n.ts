@@ -4,6 +4,7 @@ const dict = {
   en: {
     "nav.features": "Features",
     "nav.demo": "Demo",
+    "nav.pricing": "Pricing",
     "nav.faq": "FAQ",
     "nav.cta": "Join the waitlist",
 
@@ -15,6 +16,8 @@ const dict = {
     "hero.badge.gdpr": "GDPR-ready · EU data residency",
     "hero.badge.apollo": "Apollo + verified email built-in",
     "hero.badge.instantly": "1-click push to Instantly",
+    "hero.badge.soc2": "SOC 2 Type II · in progress",
+    "hero.badge.iso27001": "ISO 27001 · roadmap",
 
     "form.placeholder": "you@company.com",
     "form.submit": "Join the waitlist",
@@ -88,9 +91,18 @@ const dict = {
     "plans.solo.who": "Indie founders, freelancers",
     "plans.team.who": "1–10 person sales orgs",
     "plans.agency.who": "Outbound shops, multi-tenant",
+    "plans.enterprise.who": "Mid-market & enterprise",
+    "plans.enterprise.priceLabel": "Custom",
+    "plans.enterprise.priceNote": "talk to us",
+    "plans.enterprise.cta": "Contact sales",
     "plans.feat.runs": "lead-runs / month",
     "plans.feat.leads": "verified leads / run",
     "plans.feat.unlimited": "Unlimited runs",
+    "plans.feat.seats": "Unlimited seats",
+    "plans.feat.sso": "SSO + SCIM",
+    "plans.feat.sla": "Uptime SLA + DPA",
+    "plans.feat.am": "Dedicated account manager",
+    "plans.feat.api": "API + webhook access",
 
     "faq.eyebrow": "FAQ",
     "faq.title": "Common questions.",
@@ -117,6 +129,30 @@ const dict = {
     "bottom.subtitle":
       "We'd rather have 100 customers who paid €19 than 10,000 who clicked once. If pipeline matters to you, lock founding pricing now.",
 
+    "enterprise.eyebrow": "Enterprise",
+    "enterprise.title.before": "Built for teams that need more than",
+    "enterprise.title.accent": "a credit-card checkout.",
+    "enterprise.subtitle":
+      "Multi-workspace orgs, regulated industries, security-first procurement. Skerry is engineered to pass your CISO's checklist.",
+    "enterprise.security.title": "Security & compliance",
+    "enterprise.security.body":
+      "EU data residency, encryption at rest + in transit, signed DPA, SCIM-provisioned access, audit logs. SOC 2 Type II in progress, ISO 27001 on the roadmap.",
+    "enterprise.support.title": "Dedicated support",
+    "enterprise.support.body":
+      "Named account manager, priority Slack/Teams channel, 99.9% uptime SLA, quarterly business reviews — all included.",
+    "enterprise.integration.title": "Seamless integration",
+    "enterprise.integration.body":
+      "REST API, webhook subscriptions, SSO via SAML or OIDC, multi-workspace billing, white-label client portal for agencies.",
+    "enterprise.cta.title": "Ready for enterprise?",
+    "enterprise.cta.subtitle":
+      "30-minute call to walk through your security review, integration plan, and rollout. No commitment.",
+    "enterprise.cta.button": "Contact sales →",
+
+    "trust.eyebrow": "Trusted by",
+    "trust.title": "Teams that ship pipeline, not spreadsheets.",
+    "trust.placeholder":
+      "Customer logos go here once we publicly launch. Your founding-member logo could be one of them.",
+
     "footer.tagline": "Built for founders who hate writing follow-ups.",
     "footer.privacy": "Privacy",
     "footer.terms": "Terms",
@@ -124,6 +160,7 @@ const dict = {
   de: {
     "nav.features": "Features",
     "nav.demo": "Demo",
+    "nav.pricing": "Preise",
     "nav.faq": "FAQ",
     "nav.cta": "Zur Warteliste",
 
@@ -135,6 +172,8 @@ const dict = {
     "hero.badge.gdpr": "DSGVO-ready · EU Data Residency",
     "hero.badge.apollo": "Apollo + verifizierte Mail eingebaut",
     "hero.badge.instantly": "1-Klick Push zu Instantly",
+    "hero.badge.soc2": "SOC 2 Type II · in Vorbereitung",
+    "hero.badge.iso27001": "ISO 27001 · auf Roadmap",
 
     "form.placeholder": "du@firma.com",
     "form.submit": "Zur Warteliste",
@@ -210,9 +249,18 @@ const dict = {
     "plans.solo.who": "Indie-Founder, Freelancer",
     "plans.team.who": "1–10 Personen Sales-Teams",
     "plans.agency.who": "Outbound-Agenturen, multi-tenant",
+    "plans.enterprise.who": "Mittelstand & Enterprise",
+    "plans.enterprise.priceLabel": "Custom",
+    "plans.enterprise.priceNote": "auf Anfrage",
+    "plans.enterprise.cta": "Sales kontaktieren",
     "plans.feat.runs": "Lead-Runs / Monat",
     "plans.feat.leads": "verifizierte Leads / Run",
     "plans.feat.unlimited": "Unlimitierte Runs",
+    "plans.feat.seats": "Unlimitierte Seats",
+    "plans.feat.sso": "SSO + SCIM",
+    "plans.feat.sla": "Uptime SLA + AVV",
+    "plans.feat.am": "Persönlicher Account Manager",
+    "plans.feat.api": "API + Webhook-Zugang",
 
     "faq.eyebrow": "FAQ",
     "faq.title": "Häufige Fragen.",
@@ -238,6 +286,30 @@ const dict = {
     "bottom.title": "Auf die Liste. Vordrängeln wenn du's ernst meinst.",
     "bottom.subtitle":
       "Lieber 100 Kunden mit €19 Anzahlung als 10.000 die einmal klicken. Wenn Pipeline für dich zählt, sichere dir den Founding-Preis.",
+
+    "enterprise.eyebrow": "Enterprise",
+    "enterprise.title.before": "Gebaut für Teams, die mehr brauchen als",
+    "enterprise.title.accent": "ein Self-Service-Checkout.",
+    "enterprise.subtitle":
+      "Mehrere Workspaces, regulierte Branchen, sicherheitsfokussierter Einkauf. Skerry ist gebaut, um die Checkliste deines CISO zu bestehen.",
+    "enterprise.security.title": "Security & Compliance",
+    "enterprise.security.body":
+      "EU Data Residency, Verschlüsselung at-rest + in-transit, signierte AVV, SCIM-provisionierte Zugänge, Audit-Logs. SOC 2 Type II in Vorbereitung, ISO 27001 auf der Roadmap.",
+    "enterprise.support.title": "Persönlicher Support",
+    "enterprise.support.body":
+      "Fester Account Manager, priorisierter Slack/Teams-Channel, 99.9% Uptime SLA, vierteljährliche Reviews — alles inklusive.",
+    "enterprise.integration.title": "Nahtlose Integration",
+    "enterprise.integration.body":
+      "REST-API, Webhook-Subscriptions, SSO via SAML oder OIDC, Multi-Workspace-Billing, White-Label Kundenportal für Agenturen.",
+    "enterprise.cta.title": "Bereit für Enterprise?",
+    "enterprise.cta.subtitle":
+      "30-minütiger Call: dein Security Review, der Integrations-Plan, das Rollout. Unverbindlich.",
+    "enterprise.cta.button": "Sales kontaktieren →",
+
+    "trust.eyebrow": "Vertraut von",
+    "trust.title": "Teams, die Pipeline liefern — keine Tabellen.",
+    "trust.placeholder":
+      "Kundenlogos kommen hier rein, sobald wir öffentlich live gehen. Dein Founding-Member-Logo könnte eins davon sein.",
 
     "footer.tagline":
       "Gebaut für Founder, die keine Lust auf Follow-up-Schreiben haben.",
