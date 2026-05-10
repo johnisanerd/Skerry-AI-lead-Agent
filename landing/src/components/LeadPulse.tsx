@@ -48,15 +48,36 @@ export default function LeadPulse() {
           style={{ animationDelay: "1.3s" }}
         />
 
-        {/* Sweep beam */}
-        <div className="absolute inset-0 origin-center">
+        {/* Sweep — single rotating group containing trail wedge + needle */}
+        <div
+          className="absolute inset-0 rounded-full"
+          style={{ animation: "sweep 3.6s linear infinite" }}
+        >
+          {/* Trail: fades counterclockwise from the needle (12 o'clock) */}
           <div
-            className="absolute left-1/2 top-1/2 h-[50%] w-[50%] origin-top-left"
+            className="absolute inset-0 rounded-full"
             style={{
               background:
-                "conic-gradient(from 0deg, rgba(167,139,250,0.55), rgba(167,139,250,0) 35%)",
-              animation: "sweep 4s linear infinite",
-              transformOrigin: "0 0",
+                "conic-gradient(from -90deg, rgba(167,139,250,0.42) 0deg, rgba(167,139,250,0) 1deg, rgba(167,139,250,0) 280deg, rgba(167,139,250,0.42) 359deg)",
+            }}
+          />
+          {/* Needle: thin bright line from center to outer edge at 12 o'clock */}
+          <div
+            className="absolute left-1/2 top-0 h-1/2 w-[2px] -translate-x-1/2"
+            style={{
+              background:
+                "linear-gradient(to bottom, rgba(245,243,255,0.95) 0%, rgba(196,181,253,0.85) 30%, rgba(167,139,250,0.5) 70%, transparent 100%)",
+              boxShadow:
+                "0 0 8px rgba(196,181,253,0.85), 0 0 18px rgba(167,139,250,0.55)",
+              borderRadius: "2px",
+            }}
+          />
+          {/* Tip glow */}
+          <div
+            className="absolute left-1/2 top-0 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-100"
+            style={{
+              boxShadow:
+                "0 0 10px rgba(245,243,255,0.95), 0 0 24px rgba(167,139,250,0.7)",
             }}
           />
         </div>
