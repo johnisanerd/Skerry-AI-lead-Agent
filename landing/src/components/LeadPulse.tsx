@@ -48,32 +48,42 @@ export default function LeadPulse() {
           style={{ animationDelay: "1.3s" }}
         />
 
-        {/* Sweep — single rotating group containing trail wedge + needle */}
+        {/* Sweep — needle + fanned ghost trail (no conic-gradient = no edge
+            artifacts). The whole group rotates; ghosts are statically
+            offset counterclockwise relative to the leading needle. */}
         <div
           className="absolute inset-0 rounded-full"
           style={{ animation: "sweep 3.6s linear infinite" }}
         >
-          {/* Trail: fades counterclockwise from the needle (12 o'clock) */}
-          <div
-            className="absolute inset-0 rounded-full"
+          {Array.from({ length: 9 }, (_, i) => {
+            const angleDeg = -(i + 1) * 6;
+            const opacity = 0.45 * (1 - i / 9);
+            return (
+              <span
+                key={i}
+                className="absolute left-1/2 bottom-1/2 h-1/2 w-[2px] origin-bottom"
+                style={{
+                  transform: `translateX(-50%) rotate(${angleDeg}deg)`,
+                  background: `linear-gradient(to top, transparent 0%, rgba(167,139,250,${opacity}) 100%)`,
+                }}
+              />
+            );
+          })}
+
+          {/* Leading needle */}
+          <span
+            className="absolute left-1/2 bottom-1/2 h-1/2 w-[2px] origin-bottom rounded"
             style={{
+              transform: "translateX(-50%)",
               background:
-                "conic-gradient(from -90deg, rgba(167,139,250,0.42) 0deg, rgba(167,139,250,0) 1deg, rgba(167,139,250,0) 280deg, rgba(167,139,250,0.42) 359deg)",
-            }}
-          />
-          {/* Needle: thin bright line from center to outer edge at 12 o'clock */}
-          <div
-            className="absolute left-1/2 top-0 h-1/2 w-[2px] -translate-x-1/2"
-            style={{
-              background:
-                "linear-gradient(to bottom, rgba(245,243,255,0.95) 0%, rgba(196,181,253,0.85) 30%, rgba(167,139,250,0.5) 70%, transparent 100%)",
+                "linear-gradient(to top, transparent 0%, rgba(167,139,250,0.55) 55%, rgba(196,181,253,0.92) 90%, rgba(245,243,255,0.98) 100%)",
               boxShadow:
-                "0 0 8px rgba(196,181,253,0.85), 0 0 18px rgba(167,139,250,0.55)",
-              borderRadius: "2px",
+                "0 0 6px rgba(196,181,253,0.85), 0 0 18px rgba(167,139,250,0.55)",
             }}
           />
+
           {/* Tip glow */}
-          <div
+          <span
             className="absolute left-1/2 top-0 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-100"
             style={{
               boxShadow:
