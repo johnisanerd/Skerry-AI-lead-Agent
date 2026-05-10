@@ -14,7 +14,6 @@ export default defineConfig({
     // injects bindings at request-time as normal.
     platformProxy: { enabled: false },
   }),
-  session: false,
   integrations: [tailwind({ applyBaseStyles: false }), react()],
   prefetch: { defaultStrategy: "viewport" },
   vite: {
