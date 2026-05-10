@@ -3,6 +3,8 @@ import Layout from "@/layouts/Layout.astro";
 import Header from "@/components/Header.astro";
 import WaitlistForm from "@/components/WaitlistForm.tsx";
 import FoundingDepositCTA from "@/components/FoundingDepositCTA.tsx";
+import LeadPulse from "@/components/LeadPulse.tsx";
+import AgentDemo from "@/components/AgentDemo.tsx";
 import { detectLang, t } from "@/lib/i18n";
 
 const lang = detectLang(Astro.request);
@@ -81,66 +83,115 @@ const faqItems = (
   <!-- HERO -->
   <section
     id="waitlist"
-    class="mx-auto max-w-6xl px-6 pb-20 pt-16 sm:pt-24 lg:pt-28"
+    class="mx-auto max-w-6xl px-6 pb-20 pt-12 sm:pt-20 lg:pt-24"
   >
-    <div class="max-w-3xl">
-      <span class="eyebrow">{t(lang, "hero.eyebrow")}</span>
-      <h1
-        class="heading mt-5 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl"
-      >
-        {t(lang, "hero.title.before")}
-        <span class="text-gradient-brand">{t(lang, "hero.title.accent")}</span>
-      </h1>
-      <p class="body-text mt-6 max-w-2xl text-lg leading-relaxed">
-        {t(lang, "hero.subtitle")}
-      </p>
+    <div class="grid items-center gap-10 lg:grid-cols-[1.1fr_1fr] lg:gap-16">
+      <div>
+        <span class="eyebrow">{t(lang, "hero.eyebrow")}</span>
+        <h1
+          class="heading mt-5 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl"
+        >
+          {t(lang, "hero.title.before")}
+          <span class="text-gradient-brand">{t(lang, "hero.title.accent")}</span>
+        </h1>
+        <p class="body-text mt-6 max-w-2xl text-lg leading-relaxed">
+          {t(lang, "hero.subtitle")}
+        </p>
 
-      <div class="mt-10 max-w-2xl">
-        <WaitlistForm
-          client:load
-          ctaLabel={t(lang, "form.submit")}
-          placeholder={t(lang, "form.placeholder")}
-          successCopyNew={t(lang, "form.success.copy.new")}
-          successCopyDup={t(lang, "form.success.copy.dup")}
-          successTitle={t(lang, "form.success.title")}
-          successCta={t(lang, "form.success.cta")}
-          successNote={t(lang, "form.success.note")}
-          errorGeneric={t(lang, "form.error.generic")}
-        />
+        <div class="mt-8 max-w-xl">
+          <WaitlistForm
+            client:load
+            ctaLabel={t(lang, "form.submit")}
+            placeholder={t(lang, "form.placeholder")}
+            successCopyNew={t(lang, "form.success.copy.new")}
+            successCopyDup={t(lang, "form.success.copy.dup")}
+            successTitle={t(lang, "form.success.title")}
+            successCta={t(lang, "form.success.cta")}
+            successNote={t(lang, "form.success.note")}
+            errorGeneric={t(lang, "form.error.generic")}
+          />
+        </div>
+
+        <div
+          class="muted-text mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs"
+        >
+          {[
+            t(lang, "hero.badge.gdpr"),
+            t(lang, "hero.badge.apollo"),
+            t(lang, "hero.badge.instantly"),
+          ].map((label) => (
+            <span class="flex items-center gap-2">
+              <svg
+                class="h-3.5 w-3.5 text-brand-500 dark:text-brand-400"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M5 12l5 5L20 7"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              {label}
+            </span>
+          ))}
+        </div>
       </div>
 
-      <div
-        class="muted-text mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs"
-      >
-        {[
-          t(lang, "hero.badge.gdpr"),
-          t(lang, "hero.badge.apollo"),
-          t(lang, "hero.badge.instantly"),
-        ].map((label) => (
-          <span class="flex items-center gap-2">
-            <svg
-              class="h-3.5 w-3.5 text-brand-500 dark:text-brand-400"
-              viewBox="0 0 24 24"
-              fill="none"
-              aria-hidden="true"
-            >
-              <path
-                d="M5 12l5 5L20 7"
-                stroke="currentColor"
-                stroke-width="2.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-            {label}
-          </span>
-        ))}
+      <div class="flex justify-center lg:justify-end">
+        <LeadPulse client:load />
       </div>
     </div>
   </section>
 
-  <!-- DEMO BLOCK PLACEHOLDER (filled in Push 2/3) -->
-  <section id="demo" class="mx-auto max-w-6xl px-6 pb-24"></section>
+  <!-- DEMO BLOCK -->
+  <section id="demo" class="mx-auto max-w-6xl px-6 pb-24 pt-8">
+    <div class="mb-10 text-center">
+      <span class="eyebrow inline-flex items-center gap-1.5">
+        <svg
+          viewBox="0 0 24 24"
+          class="h-3.5 w-3.5"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
+        </svg>
+        {t(lang, "demo.eyebrow")}
+      </span>
+      <h2
+        class="heading mx-auto mt-4 max-w-3xl text-3xl font-bold tracking-tight sm:text-5xl"
+      >
+        {t(lang, "demo.title.before")}
+        <span class="text-gradient-brand">{t(lang, "demo.title.accent")}</span>
+      </h2>
+      <p class="body-text mx-auto mt-4 max-w-2xl text-base leading-relaxed">
+        {t(lang, "demo.subtitle")}
+      </p>
+    </div>
+
+    <AgentDemo
+      client:load
+      url={t(lang, "demo.url")}
+      icp={t(lang, "demo.icp")}
+      contactsLabel={t(lang, "demo.contacts")}
+      stageInputLabel={t(lang, "demo.stage.input")}
+      stageResearchLabel={t(lang, "demo.stage.research")}
+      stageDraftLabel={t(lang, "demo.stage.draft")}
+      stageSendLabel={t(lang, "demo.stage.send")}
+      stageDoneLabel={t(lang, "demo.stage.done")}
+      resultsTitle={t(lang, "demo.results.title")}
+      resultsSuffix={t(lang, "demo.results.suffix")}
+      resultsCount={t(lang, "demo.results.count")}
+      matchLabel={t(lang, "demo.results.match")}
+      viewAllLabel={t(lang, "demo.viewall")}
+      emailSubject={t(lang, "demo.email.subject")}
+      emailBody={t(lang, "demo.email.body")}
+      sentViaLabel={t(lang, "demo.email.sentvia")}
+    />
+  </section>
 
   <!-- HOW IT WORKS -->
   <section id="features" class="mx-auto max-w-6xl px-6 pb-24">
